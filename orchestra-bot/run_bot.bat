@@ -1,12 +1,12 @@
 @echo off
-title Orchestra Duel Bot (Opsi B — Memory First)
+title Orchestra Duel Bot (Pure Memory Mode)
 
 echo.
 echo ╔══════════════════════════════════════╗
 echo ║   Orchestra Duel Bot — Memory Mode   ║
-║   LP + Phase + Turn dari memory       ║
-║   Kartu dari Vision (LLM)             ║
-╚══════════════════════════════════════╝
+echo ║   LP + Phase + Turn dari memory      ║
+echo ║   Pure Memory (Tanpa Vision / AI)    ║
+echo ╚══════════════════════════════════════╝
 echo.
 
 :: Check Python
@@ -23,11 +23,11 @@ if not exist .env (
     copy .env.example .env >nul
 )
 
-:: Check psutil (needed for memory hacking)
-python -c "import psutil" 2>nul
+:: Check dependencies (zmq, loguru, json5, psutil, requests, PIL, pyautogui, dotenv)
+python -c "import zmq, loguru, json5, psutil, requests, PIL, pyautogui, dotenv" 2>nul
 if %errorlevel% neq 0 (
-    echo [INFO] Installing psutil for memory hacking...
-    pip install psutil
+    echo [INFO] Missing dependencies. Installing requirements...
+    python -m pip install -r requirements.txt
 )
 
 :: Optional: auto-calibrate on first run
@@ -37,7 +37,7 @@ if not exist memory_offsets.txt (
 )
 
 :: Run
-echo [INFO] Starting Orchestra Bot (Memory + Vision hybrid)...
+echo [INFO] Starting Orchestra Bot (Pure Memory Mode)...
 python main.py
 
 if %errorlevel% neq 0 (

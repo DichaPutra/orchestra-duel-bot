@@ -34,6 +34,27 @@ def setup_dotenv():
         load_dotenv(env_path)
 
 
+def configure_vision():
+    """Load keys and configure vision module."""
+    import vision
+    
+    keys = {
+        "gemini_key": os.getenv("GEMINI_API_KEY", ""),
+        "openai_key": os.getenv("OPENAI_API_KEY", ""),
+        "openrouter_key": os.getenv("OPENROUTER_API_KEY", ""),
+        "groq_key": os.getenv("GROQ_API_KEY", ""),
+    }
+    
+    models = {}
+    for m in ["gemini_model", "openai_model", "openrouter_model", "groq_model"]:
+        val = os.getenv(m.upper(), "")
+        if val:
+            models[m] = val
+            
+    provider = os.getenv("LLM_PROVIDER", "gemini")
+    vision.configure(provider, keys, models)
+
+
 def server_mode(port: int = 5555):
     """Mode server-only: jalanin ZMQ server."""
     import window
@@ -43,16 +64,10 @@ def server_mode(port: int = 5555):
     import memory_state  # Opsi B
     from orchestra_server import OrchestraServer, run_server
 
-    # Setup API key
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if api_key:
-        vision.set_api_key(api_key)
-        logger.info("Gemini API key loaded")
-    else:
-        logger.warning("GEMINI_API_KEY not set in .env")
+    configure_vision()
 
     server = OrchestraServer()
-    server.bind_modules(capture, inp, vision, window, memory_state)
+    server.bind_modules(capture, vision, inp, window, memory_state)
 
     logger.info("Starting Orchestra Server on port %d...", port)
     run_server(port, server)
@@ -68,16 +83,11 @@ def standalone_mode(bot_name: str = "self_burn"):
     import memory_state  # Opsi B
     from orchestra_server import OrchestraServer, run_server
 
-    # Setup API key
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if api_key:
-        vision.set_api_key(api_key)
-    else:
-        logger.warning("GEMINI_API_KEY not set. Vision will not work.")
+    configure_vision()
 
     # Start server di thread terpisah
     server = OrchestraServer()
-    server.bind_modules(capture, inp, vision, window, memory_state)
+    server.bind_modules(capture, vision, inp, window, memory_state)
     server_thread = threading.Thread(
         target=run_server, args=(5555, server),
         daemon=True
@@ -112,9 +122,9 @@ def main():
                         help="Run server only (no bot)")
     parser.add_argument("--port", type=int, default=5555,
                         help="ZMQ server port (default: 5555)")
-    parser.add_argument("--bot", type=str, default="self_burn",
+    parser.add_argument("--bot", type=str, default="llm",
                         choices=["self_burn", "pass_turn", "llm"],
-                        help="Bot script to use (default: self_burn)")
+                        help="Bot script to use (default: llm)")
     args = parser.parse_args()
 
     if args.server:

@@ -11,15 +11,6 @@ from jduel_bot import jduel_bot_enums as enums
 
 logger = logging.getLogger("orchestra.bot.self_burn")
 
-# Kartu yang didukung bot ini (Self Burn deck)
-SELF_BURN_CARDS = [
-    "Chain Energy", "Cybernetic Fusion Support",
-    "Toon Table of Contents", "Upstart Goblin",
-    "Into the Void", "Pot of Desires",
-    "Contract with Don Thousand", "Soul Levy",
-    "Chain Strike", "Time-Tearing Morganite",
-]
-
 
 def run():
     """Main loop Self Burn bot."""
@@ -63,24 +54,29 @@ def run():
             elif phase == enums.Phase.Main1:
                 board = client.get_board_state()
                 hand = board.player_card_states[enums.Player.Myself].hand
+                hand_size = len(hand)
 
-                # Activate self-burn cards dari hand
+                # Coba aktifkan kartu satu per satu secara blind (karena memory-only)
                 activated = False
-                for i, card in enumerate(hand):
-                    if card.name in SELF_BURN_CARDS:
-                        logger.info("Activating %s from hand index %d",
-                                    card.name, i)
-                        try:
-                            client.activate_spell_or_trap_from_hand(
-                                i, enums.CardPosition.MagicC)
+                for i in range(hand_size):
+                    logger.info("Attempting to activate hand index %d", i)
+                    try:
+                        client.activate_spell_or_trap_from_hand(
+                            i, enums.CardPosition.MagicC)
+                        time.sleep(1.5)
+
+                        # Cek apakah hand count berubah
+                        new_board = client.get_board_state()
+                        new_hand_size = len(new_board.player_card_states[enums.Player.Myself].hand)
+                        if new_hand_size < hand_size:
+                            logger.info("Card successfully activated! Hand size decreased from %d to %d", hand_size, new_hand_size)
                             activated = True
-                            time.sleep(1.5)
-                        except Exception as e:
-                            logger.warning("Failed to activate %s: %s",
-                                           card.name, e)
+                            break # Break out of loop to refresh board state and restart
+                    except Exception as e:
+                        logger.warning("Failed to activate hand index %d: %s", i, e)
 
                 if not activated:
-                    logger.info("No burn cards to activate, ending turn")
+                    logger.info("No more cards can be activated, ending turn")
                     client.move_phase(enums.Phase.End)
 
             elif phase == enums.Phase.Battle:

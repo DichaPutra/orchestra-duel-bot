@@ -1,0 +1,100 @@
+Example 1: Main 1 Phase, hybrid mode (card names visible), we have playable cards.
+Input:
+Current Turn: 1
+My LP: 8000
+Opponent LP: 8000
+Current Phase: Main 1
+My Hand: ["Maxx C", "Chain Energy", "Sangen Summoning"]
+My Monsters: [Empty, Empty, Empty, Empty, Empty]
+My Spells/Traps: [Empty, Empty, Empty, Empty, Empty]
+My Graveyard: []
+Opponent Monsters Count: 0
+Opponent Spells/Traps Count: 0
+Is Active Dialog: None
+
+Output:
+{
+  "thought": "I will activate the spell Sangen Summoning from my hand at index 2 to set up my field.",
+  "action": "ACTIVATE_HAND",
+  "arguments": {
+    "hand_index": 2,
+    "zone": 9
+  }
+}
+
+---
+
+Example 2: Battle Phase, hybrid mode, we have a monster ready to attack.
+Input:
+Current Turn: 2
+My LP: 8000
+Opponent LP: 6000
+Current Phase: Battle
+My Hand: ["Ash Blossom"]
+My Monsters: [Empty, Empty, {"name": "Tenpai Dragon Chulim", "atk": 1500, "def": 1000, "face-up": true}, Empty, Empty]
+My Spells/Traps: [Empty, Empty, Empty, Empty, Empty]
+My Graveyard: ["Sangen Summoning"]
+Opponent Monsters Count: 1 (Monster in zone 2)
+Opponent Spells/Traps Count: 0
+Is Active Dialog: None
+
+Output:
+{
+  "thought": "My monster in zone 2 has 1500 ATK. I will declare an attack on the opponent's monster in zone 2.",
+  "action": "ATTACK",
+  "arguments": {
+    "zone": 2,
+    "target_zone": 2
+  }
+}
+
+---
+
+Example 3: Main 1 Phase, memory_only mode, cards are unknown.
+Input:
+Current Turn: 1
+My LP: 8000
+Opponent LP: 8000
+Current Phase: Main 1
+My Hand: ["Unknown Card", "Unknown Card", "Unknown Card"]
+My Monsters: [Empty, Empty, Empty, Empty, Empty]
+My Spells/Traps: [Empty, Empty, Empty, Empty, Empty]
+My Graveyard: []
+Opponent Monsters Count: 0
+Opponent Spells/Traps Count: 0
+Is Active Dialog: None
+
+Output:
+{
+  "thought": "Since I am in memory_only mode, I will try to activate the first card in my hand (index 0) blindly to see if it is a playable spell/trap.",
+  "action": "ACTIVATE_HAND",
+  "arguments": {
+    "hand_index": 0,
+    "zone": 9
+  }
+}
+
+---
+
+Example 4: No actions possible in Main 1.
+Input:
+Current Turn: 1
+My LP: 8000
+Opponent LP: 8000
+Current Phase: Main 1
+My Hand: []
+My Monsters: [Empty, Empty, Empty, Empty, Empty]
+My Spells/Traps: [Empty, Empty, Empty, Empty, Empty]
+My Graveyard: []
+Opponent Monsters Count: 0
+Opponent Spells/Traps Count: 0
+Is Active Dialog: None
+
+Output:
+{
+  "thought": "My hand is empty and I have no monsters to attack. I will end my turn.",
+  "action": "MOVE_PHASE",
+  "arguments": {
+    "phase": "End"
+  }
+}

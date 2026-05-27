@@ -8,6 +8,7 @@ Mode Hybrid (Opsi A + Opsi B):
 """
 
 import json
+import os
 import logging
 import sys
 import time
@@ -19,9 +20,8 @@ from jduel_bot import jduel_bot_enums as enums
 logger = logging.getLogger("orchestra.server")
 
 # ── MODE PILIHAN ──
-# "memory_first" = coba memory dulu, fallback vision
-# "vision_only" = pure vision (macOS dev, atau kalo memory gagal)
-MODE = "memory_first"
+# "hybrid" = memory + vision fallback, "memory_only" = pure memory reader
+MODE = os.getenv("BOT_MODE", "memory_only").lower()
 
 # Statistik
 _server_stats = {
@@ -49,25 +49,23 @@ class OrchestraServer:
         self.capture = None
         self.input = None
         self.vision = None
-        self.window_finder = None
+        self.window = None
         self.memory_state = None
 
-        # Vision state cache (LLM Vision mahal, cache biar gak tiap detik)
+        # Vision state cache
         self._last_vision_state = None
         self._last_vision_time = 0
         self._vision_cache_ttl = 0.5  # detik
 
-        # Track game state changes — vision cuma kalo ada perubahan signifikan
         self._last_lp = 8000
         self._last_phase = 2
         self._last_hand = 5
-        self._board_version = 0  # Increment kalo perlu refresh board state
 
-    def bind_modules(self, capture_mod, input_mod, vision_mod, window_mod, memory_state_mod=None):
+    def bind_modules(self, capture_mod, vision_mod, input_mod, window_mod, memory_state_mod=None):
         """Bind module references."""
         self.capture = capture_mod
-        self.input = input_mod
         self.vision = vision_mod
+        self.input = input_mod
         self.window = window_mod
         self.memory_state = memory_state_mod
 
@@ -75,11 +73,9 @@ class OrchestraServer:
         global MODE
         if memory_state_mod is not None and hasattr(memory_state_mod, 'try_init_memory'):
             if memory_state_mod.try_init_memory():
-                MODE = "memory_first"
-                logger.info("🔄 Server mode: MEMORY FIRST (Opsi B)")
+                logger.info(f"🔄 Server mode: {MODE.upper()}")
             else:
-                MODE = "vision_only"
-                logger.info("🔄 Server mode: VISION ONLY (Opsi A fallback)")
+                logger.warning(f"⚠️ Memory reader init failed. Running in {MODE.upper()} mode anyway.")
 
     # ── Command dispatch ──
 
@@ -134,6 +130,8 @@ class OrchestraServer:
     def _get_screenshot(self):
         """Screenshot window game."""
         rect = self._get_rect()
+        if self.capture is None:
+            raise RuntimeError("Capture module not bound")
         img = self.capture.capture_window(rect)
         if img is None:
             raise RuntimeError("Failed to capture game window")
@@ -141,29 +139,36 @@ class OrchestraServer:
 
     def _get_vision_state(self, force=False):
         """Dapetin state dari vision (cached)."""
+        if self.vision is None:
+            return None
         now = time.time()
         cache_age = now - self._last_vision_time
         if not force and self._last_vision_state and cache_age < self._vision_cache_ttl:
             return self._last_vision_state
 
-        img, rect = self._get_screenshot()
-        if self.input is not None:
-            self.input.set_window_rect(rect)
+        try:
+            img, rect = self._get_screenshot()
+            if self.input is not None:
+                self.input.set_window_rect(rect)
 
-        state = self.vision.get_board_state(img)
-        if state:
-            self._last_vision_state = state
-            self._last_vision_time = now
-            global _server_stats
-            _server_stats["vision_board_states"] += 1
-        return state
+            state = self.vision.get_board_state(img)
+            if state:
+                self._last_vision_state = state
+                self._last_vision_time = now
+                global _server_stats
+                _server_stats["vision_board_states"] += 1
+            return state
+        except Exception as e:
+            logger.error("Failed to get vision state: %s", e)
+            return None
+
+
 
     def _get_state_hybrid(self, force_vision=False):
         """
         Hybrid state reader:
-        - LP, Phase, Turn dari memory (MODE == "memory_first")
-        - Card state dari vision
-        - Vision cuma dipanggil kalo ada perubahan signifikan atau diminta force
+        - Jika MODE == "memory_only", murni baca RAM + dummy card names.
+        - Jika MODE == "hybrid", baca RAM + panggil Vision untuk nama kartu.
         """
         result = {
             "MY_LP": 8000,
@@ -182,10 +187,9 @@ class OrchestraServer:
             "source": "memory",
         }
 
-        need_vision = force_vision
-
         # ── Memory path ──
-        if MODE == "memory_first" and self.memory_state is not None:
+        memory_ok = False
+        if self.memory_state is not None:
             my_lp = self.memory_state.read_lp(0)
             opp_lp = self.memory_state.read_lp(1)
             phase = self.memory_state.read_phase()
@@ -210,112 +214,102 @@ class OrchestraServer:
             if hand is not None and 0 <= hand <= 15:
                 result["HAND_COUNT"] = hand
 
-            # Detect significant changes → need vision refresh
-            if (abs(result["MY_LP"] - self._last_lp) > 0 or
-                result["PHASE_VALUE"] != self._last_phase or
-                result["HAND_COUNT"] != self._last_hand or
-                force_vision):
-                need_vision = True
-                self._board_version += 1
-            else:
-                # No change, use cached vision state if available
-                if self._last_vision_state:
-                    result["CARDS_IN_HAND"] = self._last_vision_state.get("CARDS_IN_HAND", [])
-                    result["MY_MONSTERS"] = self._last_vision_state.get("MY_MONSTERS", [])
-                    result["MY_SPELLS_TRAPS"] = self._last_vision_state.get("MY_SPELLS_TRAPS", [])
-                    result["MY_GRAVEYARD"] = self._last_vision_state.get("MY_GRAVEYARD", [])
-                    result["OPPONENT_MONSTERS"] = self._last_vision_state.get("OPPONENT_MONSTERS", 0)
-                    result["OPPONENT_SPELLS_TRAPS"] = self._last_vision_state.get("OPPONENT_SPELLS_TRAPS", 0)
-                    need_vision = False
-                    result["source"] = "memory+cache"
-            # Always save LP corner case: kalo 0, duel ended
-            if result["MY_LP"] == 0 and self._last_lp == 0:
+            if result["MY_LP"] == 0:
                 result["DUEL_ENDED"] = True
+
+            memory_ok = (my_lp is not None)
+
+        if MODE == "memory_only" or self.vision is None:
+            # Pure RAM mode: Generate dummy card names
+            result["CARDS_IN_HAND"] = ["Unknown Card"] * result["HAND_COUNT"]
+            result["source"] = "memory"
 
             # Update tracking
             self._last_lp = result["MY_LP"]
             self._last_phase = result["PHASE_VALUE"]
             self._last_hand = result["HAND_COUNT"]
+            return result
 
-        else:
-            need_vision = True
-            result["source"] = "vision"
+        # ── Hybrid / Vision Path ──
+        need_vision = force_vision or not memory_ok
 
-        # ── Vision path (kalo perlu) ──
+        # Check if RAM values changed significantly
+        if memory_ok:
+            if (abs(result["MY_LP"] - self._last_lp) > 0 or
+                result["PHASE_VALUE"] != self._last_phase or
+                result["HAND_COUNT"] != self._last_hand):
+                need_vision = True
+
         if need_vision:
-            try:
-                vision_state = self._get_vision_state(force=True)
-                if vision_state:
-                    for key in ["MY_LP", "OPPONENT_LP", "CURRENT_PHASE",
-                                "IS_MY_TURN", "DUEL_ENDED"]:
-                        if key in vision_state:
-                            result[key] = vision_state[key]
-                    result["CARDS_IN_HAND"] = vision_state.get("CARDS_IN_HAND", [])
-                    result["MY_MONSTERS"] = vision_state.get("MY_MONSTERS", [])
-                    result["MY_SPELLS_TRAPS"] = vision_state.get("MY_SPELLS_TRAPS", [])
-                    result["MY_GRAVEYARD"] = vision_state.get("MY_GRAVEYARD", [])
-                    result["OPPONENT_MONSTERS"] = vision_state.get("OPPONENT_MONSTERS", 0)
-                    result["OPPONENT_SPELLS_TRAPS"] = vision_state.get("OPPONENT_SPELLS_TRAPS", 0)
+            vision_state = self._get_vision_state(force=True)
+            if vision_state:
+                # Override with vision values for accuracy
+                for key in ["MY_LP", "OPPONENT_LP", "CURRENT_PHASE", "IS_MY_TURN", "DUEL_ENDED"]:
+                    if key in vision_state:
+                        result[key] = vision_state[key]
+                result["CARDS_IN_HAND"] = vision_state.get("CARDS_IN_HAND", [])
+                result["MY_MONSTERS"] = vision_state.get("MY_MONSTERS", [])
+                result["MY_SPELLS_TRAPS"] = vision_state.get("MY_SPELLS_TRAPS", [])
+                result["MY_GRAVEYARD"] = vision_state.get("MY_GRAVEYARD", [])
+                result["OPPONENT_MONSTERS"] = vision_state.get("OPPONENT_MONSTERS", 0)
+                result["OPPONENT_SPELLS_TRAPS"] = vision_state.get("OPPONENT_SPELLS_TRAPS", 0)
 
-                    if result["source"] != "vision":
-                        result["source"] = "hybrid"
-                    else:
-                        result["source"] = "vision"
-                    _server_stats["vision_calls_saved"] -= 1  # Correction: this wasn't saved
-            except Exception as e:
-                logger.warning("Vision state fetch failed: %s", e)
+                result["source"] = "hybrid" if memory_ok else "vision"
 
+                # Update tracking
+                self._last_lp = result["MY_LP"]
+                self._last_phase = result["PHASE_VALUE"]
+                self._last_hand = result["HAND_COUNT"]
         else:
-            _server_stats["vision_calls_saved"] += 1
+            # Use cached vision details
+            if self._last_vision_state:
+                result["CARDS_IN_HAND"] = self._last_vision_state.get("CARDS_IN_HAND", [])
+                result["MY_MONSTERS"] = self._last_vision_state.get("MY_MONSTERS", [])
+                result["MY_SPELLS_TRAPS"] = self._last_vision_state.get("MY_SPELLS_TRAPS", [])
+                result["MY_GRAVEYARD"] = self._last_vision_state.get("MY_GRAVEYARD", [])
+                result["OPPONENT_MONSTERS"] = self._last_vision_state.get("OPPONENT_MONSTERS", 0)
+                result["OPPONENT_SPELLS_TRAPS"] = self._last_vision_state.get("OPPONENT_SPELLS_TRAPS", 0)
+                result["source"] = "memory+cache"
+                _server_stats["vision_calls_saved"] += 1
 
         return result
 
     # ── Command implementations ──
 
     def _cmd_is_dueling(self, args) -> dict:
-        """Cek apakah sedang dalam duel."""
-        if MODE == "memory_first" and self.memory_state is not None:
+        """Cek apakah sedang dalam duel (Memory + Vision fallback)."""
+        if self.memory_state is not None:
             my_lp = self.memory_state.read_lp(0)
             if my_lp is not None:
                 return {"returnValue": my_lp > 0}
-        try:
+        if MODE == "hybrid":
             state = self._get_vision_state()
             if state:
                 return {"returnValue": not state.get("DUEL_ENDED", True)}
-        except RuntimeError:
-            pass
         return {"returnValue": False}
 
     def _cmd_is_duel_ended(self, args) -> dict:
-        """Cek apakah duel sudah selesai."""
-        if MODE == "memory_first" and self.memory_state is not None:
+        """Cek apakah duel sudah selesai (Memory + Vision fallback)."""
+        if self.memory_state is not None:
             my_lp = self.memory_state.read_lp(0)
             if my_lp is not None and my_lp == 0:
-                opp_lp = self.memory_state.read_lp(1)
-                if opp_lp is not None:
-                    # Kalo kedua LP 0, kemungkinan duel ended
-                    if opp_lp == 0 or opp_lp > 0:
-                        return {"returnValue": True}
-        try:
+                return {"returnValue": True}
+        if MODE == "hybrid":
             state = self._get_vision_state()
             if state:
                 return {"returnValue": state.get("DUEL_ENDED", False)}
-        except RuntimeError:
-            pass
         return {"returnValue": False}
 
     def _cmd_is_my_turn(self, args) -> dict:
-        """Cek apakah giliran kita."""
-        if MODE == "memory_first" and self.memory_state is not None:
+        """Cek apakah giliran kita (Memory + Vision fallback)."""
+        if self.memory_state is not None:
             turn = self.memory_state.read_is_my_turn()
             if turn is not None:
                 return {"returnValue": bool(turn)}
-        try:
+        if MODE == "hybrid":
             state = self._get_vision_state()
             if state:
                 return {"returnValue": bool(state.get("IS_MY_TURN", True))}
-        except RuntimeError:
-            pass
         return {"returnValue": True}
 
     def _cmd_is_inputting(self, args) -> dict:
@@ -323,85 +317,57 @@ class OrchestraServer:
         return {"returnValue": True}
 
     def _cmd_get_current_phase(self, args) -> dict:
-        """Dapetin phase sekarang — memory first."""
-        phase_val = None
-        phase_names = {
-            "draw": 0, "standby": 1, "main 1": 2, "main1": 2,
-            "main phase 1": 2, "battle": 3, "main 2": 4, "main2": 4,
-            "main phase 2": 4, "end": 5,
-        }
-
-        # Memory path
-        if MODE == "memory_first" and self.memory_state is not None:
+        """Dapetin phase sekarang (Memory + Vision fallback)."""
+        if self.memory_state is not None:
             phase = self.memory_state.read_phase()
             if phase is not None and 0 <= phase <= 7:
-                phase_val = phase
-
-        # Vision fallback
-        if phase_val is None:
-            try:
-                state = self._get_vision_state()
-                if state:
-                    phase_str = (state.get("CURRENT_PHASE", "") or "").lower().strip()
-                    phase_val = phase_names.get(phase_str)
-            except RuntimeError:
-                pass
-
-        if phase_val is not None:
-            return {"returnValue": phase_val}
+                return {"returnValue": phase}
+        if MODE == "hybrid":
+            state = self._get_vision_state()
+            if state:
+                phase_str = (state.get("CURRENT_PHASE", "") or "").lower().strip()
+                phase_names = {
+                    "draw": 0, "standby": 1, "main 1": 2, "main1": 2,
+                    "main phase 1": 2, "battle": 3, "main 2": 4, "main2": 4,
+                    "main phase 2": 4, "end": 5,
+                }
+                return {"returnValue": phase_names.get(phase_str, 2)}
         return {"returnValue": enums.Phase.Main1.value}
 
     def _cmd_get_board_state(self, args) -> dict:
-        """Dapetin full board state — hybrid."""
-        force = args.get("force", False)
-        state = self._get_state_hybrid(force_vision=force)
-
-        # Convert ke format JDuelBotClient
+        """Dapetin full board state (Memory + Vision hybrid)."""
+        state = self._get_state_hybrid()
         return {"returnValue": _convert_state_to_client_format(state)}
 
     def _cmd_get_lp(self, args) -> dict:
-        """Dapetin LP — memory first."""
+        """Dapetin LP (Memory + Vision fallback)."""
         player = args.get("player", 0)
-
-        # Memory path
-        if MODE == "memory_first" and self.memory_state is not None:
+        if self.memory_state is not None:
             lp = self.memory_state.read_lp(player)
             if lp is not None and 0 <= lp <= 99999:
                 return {"returnValue": int(lp)}
-
-        # Vision fallback
-        try:
+        if MODE == "hybrid":
             state = self._get_vision_state()
             if state:
                 key = "MY_LP" if player == 0 else "OPPONENT_LP"
                 return {"returnValue": int(state.get(key, 8000))}
-        except RuntimeError:
-            pass
-
         return {"returnValue": 8000}
 
     def _cmd_get_card_id(self, args) -> dict:
-        """Dapetin card ID di posisi tertentu — vision-based."""
-        # Memory can't easily give card IDs (too complex)
-        # But we can try to get board state
+        """Dapetin card ID (Memory only - always 0)."""
         return {"returnValue": 0}
 
     def _cmd_get_hand_size(self, args) -> dict:
-        """Dapetin jumlah kartu di hand — memory first."""
-        # Memory path
-        if MODE == "memory_first" and self.memory_state is not None:
+        """Dapetin jumlah kartu di hand (Memory + Vision fallback)."""
+        player = args.get("player", 0)
+        if player == 0 and self.memory_state is not None:
             hand = self.memory_state.read_hand_count()
             if hand is not None and 0 <= hand <= 15:
                 return {"returnValue": int(hand)}
-
-        # Vision fallback
-        try:
+        if MODE == "hybrid":
             state = self._get_vision_state()
             if state and "CARDS_IN_HAND" in state:
                 return {"returnValue": len(state["CARDS_IN_HAND"])}
-        except RuntimeError:
-            pass
-
         return {"returnValue": 0}
 
     def _cmd_com_do_command(self, args) -> dict:
@@ -582,7 +548,7 @@ def run_server(port: int = 5555, server_instance: OrchestraServer = None):
 
     Usage:
         server = OrchestraServer()
-        server.bind_modules(capture, input, vision, window, memory_state)
+        server.bind_modules(input, window, memory_state)
         run_server(5555, server)
     """
     import zmq
@@ -618,7 +584,8 @@ def run_server(port: int = 5555, server_instance: OrchestraServer = None):
                 pct = round(saved / max(total, 1) * 100, 1) if total > 0 else 0
                 logger.info(
                     f"📊 Stats: {_server_stats['commands_processed']} commands | "
-                    f"Memory reads: {_server_stats['memory_lp_reads']} | "
+                    f"Memory LP reads: {_server_stats['memory_lp_reads']} | "
+                    f"Memory Phase reads: {_server_stats['memory_phase_reads']} | "
                     f"Vision calls: {made} | "
                     f"Saved: {saved} ({pct}%)"
                 )
