@@ -116,41 +116,40 @@ Ini panduan buat yang pertama kali. Gak perlu pengalaman coding.
 3. Atur resolusi game: **1280x720**, **Window Mode** (bukan Fullscreen)
 4. Mulai duel
 
-### Step 7: Auto-Calibrate (Sekali Aja)
+### Step 7: Jalankan Bot dan Kalibrasi lewat GUI (Sangat Direkomendasikan)
 
-Ini biar bot tau alamat memory game.
+Anda dapat mengelola konfigurasi, melakukan kalibrasi memori, serta menjalankan bot secara visual melalui antarmuka Windows GUI Manager yang modern.
 
-1. Pastikan Master Duel lagi **dalam duel** (udah lempar koin, pegang kartu)
-2. Di terminal (masih di folder `orchestra-bot`):
-   ```
-   python auto_calibrate.py --save
-   ```
-3. Kalo berhasil, akan muncul:
-   ```
-   ✅ Found LP addresses: ...
-   ✅ Found Phase address: ...
-   ✅ Offsets saved to memory_offsets.txt
-   ```
-4. Kalo gagal: pastiin game lagi dalam duel, bukan di menu.
+1. Buka folder `orchestra-bot` dan klik ganda pada file **`run_gui.bat`**.
+2. Jendela **Orchestra Bot Manager** akan terbuka.
+3. Di tab **"Konfigurasi Bot (.env)"**:
+   * Atur `Bot Mode` (direkomendasikan `hybrid` agar LLM bisa membaca nama asli kartu).
+   * Pilih `LLM Provider` yang ingin digunakan (Gemini, OpenAI, DeepSeek, OpenRouter, atau Groq).
+   * Masukkan API Key Anda, lalu klik tombol **"💾 SIMPAN KONFIGURASI"**.
+4. Buka game **Yu-Gi-Oh! Master Duel** (atur resolusi **1280x720 Window Mode**) dan masuklah ke dalam duel.
+5. Pada sidebar menu GUI, klik **"⚙ KALIBRASI MEMORI"** untuk menemukan alamat RAM otomatis. Anda dapat melihat progress deteksi offset memori langsung di tab **"Konsol Live Terminal"**.
+6. Klik **"▶ MULAI DUEL BOT"** untuk meluncurkan server dan bot sekaligus. Pantau jalannya duel dan thought process (pemikiran) LLM di tab konsol log!
+7. Klik **"⏹ HENTIKAN BOT"** kapan saja untuk menghentikan bot secara aman.
 
-### Step 8: Jalanin Bot
+---
 
-**Cara 1 — Gampang:**
-Klik 2x file **`run_bot.bat`** di folder `orchestra-bot`.
+### Cara Alternatif (Manual via Terminal / CLI)
 
-**Cara 2 — Manual (terminal):**
-Di folder `orchestra-bot`:
+Jika Anda ingin menjalankan bot secara manual tanpa GUI:
+
+**1. Kalibrasi Memori (Dalam Duel):**
+```bash
+python auto_calibrate.py --save
 ```
+
+**2. Jalankan Bot (Gampang):**
+Klik ganda file **`run_bot.bat`** di folder `orchestra-bot`.
+
+**3. Jalankan Bot (Manual):**
+```bash
 python main.py
 ```
-
-Bot bakal:
-- Connect ke game
-- Baca state (memory → vision → LLM)
-- Main kartu sendiri
-- Ulang sampe duel selesai
-
-Untuk berhenti: tekan **Ctrl+C** di terminal.
+*Gunakan **Ctrl+C** di terminal untuk menghentikan bot.*
 
 ---
 
@@ -173,6 +172,10 @@ python main.py
 yugioh-md-bot/
 ├── orchestra-bot/           # ← Kode bot utama
 │   ├── main.py              # Entry point
+│   ├── gui.py               # Windows GUI Manager desktop (Baru)
+│   ├── prompts/             # Folder prompt strategi (Baru)
+│   │   ├── system.txt       # Instruksi deck & format JSON LLM
+│   │   └── examples.txt     # Contoh input-output few-shot LLM
 │   ├── orchestra_server.py  # Server ZMQ (terima command dari bot)
 │   ├── memory_reader.py     # Baca memory game (Windows)
 │   ├── memory_scanner.py    # Scanner alamat memory otomatis
@@ -182,16 +185,17 @@ yugioh-md-bot/
 │   ├── input.py             # Klik mouse otomatis
 │   ├── window.py            # Cari jendela game
 │   ├── auto_calibrate.py    # Setup alamat memory sekali jalan
-│   ├── jduel_bot/           # Library komunikasi ZMQ (opensource)
+│   ├── jduel_bot/           # Library komunikasi ZMQ
 │   ├── bots/
-│   │   ├── self_burn.py     # Contoh bot: aktivasi + end turn
-│   │   └── ...              # Tambah bot lo sendiri
+│   │   ├── llm_bot.py       # Bot berbasis LLM Decision Maker (Bawaan)
+│   │   ├── self_burn.py     # Contoh bot statis self-burn
+│   │   └── pass_turn.py     # Contoh bot pass turn
 │   ├── .env.example
 │   ├── requirements.txt
-│   └── run_bot.bat          # Klik 2x buat jalan (Windows)
+│   ├── run_bot.bat          # Klik 2x buat jalan manual CLI (Windows)
+│   └── run_gui.bat          # Klik 2x buat jalan lewat GUI (Windows)
 ├── README.md                # ← File ini
 ├── .gitignore
-└── prompts/                 # Template deck & strategi
 ```
 
 ---
