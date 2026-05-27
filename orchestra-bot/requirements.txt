@@ -1,0 +1,17 @@
+zmq>=25.0.0
+loguru>=0.7.0
+json5>=0.9.0
+requests>=2.31.0
+Pillow>=10.0.0
+pyautogui>=0.9.54
+python-dotenv>=1.0.0
+
+# Screenshot (Windows)
+dxcam; sys_platform == 'win32'
+pygetwindow; sys_platform == 'win32'
+
+# Screenshot (macOS fallback)
+mss>=9.0.0
+
+# Memory Hacking (Windows-only — Opsi B)
+psutil; sys_platform == 'win32'
