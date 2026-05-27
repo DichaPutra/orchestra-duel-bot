@@ -7,77 +7,161 @@ Decision making pakai LLM (Gemini / OpenRouter).
 
 ---
 
-## Arsitektur
+## Cara Kerja
 
-**Dua opsi approach:**
+Bot baca state game lewat **2 cara:**
 
-### Opsi A — Vision-only (cross-platform)
-Baca state game dari screenshot pake Gemini Vision API.
-Klik mouse di koordinat yang sudah ditentukan.
-Work di Windows & macOS.
+1. **Memory** (Windows) — baca LP, Phase, Turn langsung dari RAM game. Gratis, kenceng, aman.
+2. **Vision** (Gemini AI) — screenshot layar, AI bacain kartu apa aja yang ada di hand/field.
 
-### Opsi B — Memory Hacking (Windows, recommended)
-Baca LP, Phase, Turn langsung dari memory game process via `ReadProcessMemory`.
-Vision cuma dipanggil pas ada perubahan state kartu (bukan tiap iterasi).
-**~70% lebih sedikit vision calls → 2-3x lebih cepat.**
+Memory diprioritaskan. Vision cuma dipanggil kalo ada perubahan (kartu dimainkan, dll).
+**Hasil: ~70% lebih hemat panggilan AI → bot 2-3x lebih cepat.**
 
 ```
-┌─────────────────────┐
-│  Memory Reader      │ ← LP, Phase, Turn (gratis, < 1ms)
-│  (ReadProcessMemory)│
-└────────┬────────────┘
-         │ cuma kalo state berubah
+┌─────────────────────────┐
+│  Baca Memory (gratis)   │ ← LP, Phase, Turn
+└────────┬────────────────┘
+         │ kalo ada perubahan
          ▼
-┌─────────────────────┐
-│  Vision (Gemini)    │ ← Baca state kartu (hand, field, GY)
-└────────┬────────────┘
+┌─────────────────────────┐
+│  Screenshot → Gemini AI │ ← Baca kartu di hand/field/GY
+└────────┬────────────────┘
          ▼
-┌─────────────────────┐
-│  LLM Decision       │ ← Action JSON
-└────────┬────────────┘
+┌─────────────────────────┐
+│  LLM ambil keputusan    │ ← "Main kartu apa?"
+└────────┬────────────────┘
          ▼
-┌─────────────────────┐
-│  Input (Click)      │ ← Mouse click simulation
-└─────────────────────┘
+┌─────────────────────────┐
+│  Klik mouse otomatis    │ ← Eksekusi
+└─────────────────────────┘
 ```
-
-### ZMQ Server Architecture
-
-Bot punya ZMQ server (port 5555) yang kompatibel dengan protocol JDuelBotClient.
-Bisa dipake dari script Python terpisah, atau jalan standalone dengan bot built-in.
 
 ---
 
-## Quick Start (Windows)
+## Panduan Instalasi Windows (Langkah demi Langkah)
 
-```bash
-# Masuk ke folder orchestra-bot
-cd orchestra-bot
+Ini panduan buat yang pertama kali. Gak perlu pengalaman coding.
 
-# Install dependencies
-pip install -r requirements.txt
+### Yang perlu disiapkan
 
-# Setup API key
-cp .env.example .env
-# Isi GEMINI_API_KEY di .env
+| Bahan | Catatan |
+|-------|---------|
+| **Master Duel** | Udah terinstall di PC, bisa Solo mode |
+| **Python 3.11 atau 3.12** | Download dari [python.org](https://www.python.org/downloads/) |
+| **Google Gemini API Key** | Daftar gratis di [aistudio.google.com](https://aistudio.google.com/) |
+| **Koneksi internet** | Buat panggil Gemini AI |
 
-# Buka Master Duel (1280x720, window mode, dalam duel)
-# Auto-calibrate memory addresses (sekali aja)
-python auto_calibrate.py --save
+### Step 1: Install Python
 
-# Jalanin bot
+1. Buka https://www.python.org/downloads/
+2. Klik download **Python 3.12.x**
+3. Pas file installer, **centang** ☑️ "Add Python to PATH"
+4. Klik **Install Now**
+5. Selesai. Verifikasi: buka **Command Prompt** (Win+R → ketik `cmd`), jalankan:
+   ```
+   python --version
+   ```
+   Harus muncul `Python 3.12.x`
+
+### Step 2: Download Bot
+
+1. Buka https://github.com/DichaPutra/orchestra-duel-bot
+2. Klik tombol hijau **"Code"** → **"Download ZIP"**
+3. Extract ZIP ke folder, misalnya `C:\OrchestraBot`
+
+### Step 3: Dapetin Gemini API Key
+
+1. Buka https://aistudio.google.com/
+2. Login pake Google account
+3. Klik **"Get API Key"** di kiri atas
+4. Klik **"Create API Key"** → pilih project → copy key-nya
+5. Simpan key-nya, nanti dipake di Step 5
+
+### Step 4: Install Library
+
+1. Buka folder bot tadi (C:\OrchestraBot)
+2. Klik kanan di dalem folder → **"Open in Terminal"** atau buka Command Prompt dan `cd C:\OrchestraBot`
+3. Masuk dulu ke folder orchestra-bot:
+   ```
+   cd orchestra-bot
+   ```
+4. Jalankan:
+   ```
+   pip install -r requirements.txt
+   ```
+   Tunggu sampe selesai. Kalo ada error, coba:
+   ```
+   python -m pip install -r requirements.txt
+   ```
+
+### Step 5: Setup API Key
+
+1. Di folder `orchestra-bot`, cari file **`.env.example`**
+2. **Klik kanan → Rename** jadi **`.env`**
+3. **Klik kanan → Edit** (pake Notepad)
+4. Isi API key lo:
+   ```
+   GEMINI_API_KEY=isi_api_key_lo_disini
+   ```
+   Contoh:
+   ```
+   GEMINI_API_KEY=AIzaSyB4v9Kx8...  (key asli dari Step 3)
+   ```
+5. **Save** (Ctrl+S)
+
+### Step 6: Siapin Game
+
+1. Buka **Yu-Gi-Oh! Master Duel**
+2. Masuk ke **Solo Mode** (bukan Ranked/PvP)
+3. Atur resolusi game: **1280x720**, **Window Mode** (bukan Fullscreen)
+4. Mulai duel
+
+### Step 7: Auto-Calibrate (Sekali Aja)
+
+Ini biar bot tau alamat memory game.
+
+1. Pastikan Master Duel lagi **dalam duel** (udah lempar koin, pegang kartu)
+2. Di terminal (masih di folder `orchestra-bot`):
+   ```
+   python auto_calibrate.py --save
+   ```
+3. Kalo berhasil, akan muncul:
+   ```
+   ✅ Found LP addresses: ...
+   ✅ Found Phase address: ...
+   ✅ Offsets saved to memory_offsets.txt
+   ```
+4. Kalo gagal: pastiin game lagi dalam duel, bukan di menu.
+
+### Step 8: Jalanin Bot
+
+**Cara 1 — Gampang:**
+Klik 2x file **`run_bot.bat`** di folder `orchestra-bot`.
+
+**Cara 2 — Manual (terminal):**
+Di folder `orchestra-bot`:
+```
 python main.py
-
-# Atau double-click run_bot.bat
 ```
 
-## Quick Start (macOS — vision only)
+Bot bakal:
+- Connect ke game
+- Baca state (memory → vision → LLM)
+- Main kartu sendiri
+- Ulang sampe duel selesai
+
+Untuk berhenti: tekan **Ctrl+C** di terminal.
+
+---
+
+## Untuk Pengguna macOS
+
+Bot di macOS cuma pake Vision (gak bisa memory hacking).
 
 ```bash
 cd orchestra-bot
 pip install -r requirements.txt
-cp .env.example .env
-# Isi GEMINI_API_KEY
+# Setup .env dengan API key
 python main.py
 ```
 
@@ -87,71 +171,76 @@ python main.py
 
 ```
 yugioh-md-bot/
-├── orchestra-bot/           # ← Actual bot code
-│   ├── main.py              # Entry point (server / standalone)
-│   ├── orchestra_server.py  # ZMQ server (hybrid memory + vision)
-│   ├── memory_reader.py     # Opsi B: Windows memory reader
-│   ├── memory_scanner.py    # Opsi B: AOB pattern scanner
-│   ├── memory_state.py      # Opsi B: Hybrid state reader
-│   ├── capture.py           # Screenshot (DXCam/mss)
-│   ├── vision.py            # Gemini Vision API
-│   ├── input.py             # Mouse click simulation
-│   ├── window.py            # Window finder (cross-platform)
-│   ├── auto_calibrate.py    # One-click memory calibration
-│   ├── jduel_bot/           # JDuelBotClient (opensource)
+├── orchestra-bot/           # ← Kode bot utama
+│   ├── main.py              # Entry point
+│   ├── orchestra_server.py  # Server ZMQ (terima command dari bot)
+│   ├── memory_reader.py     # Baca memory game (Windows)
+│   ├── memory_scanner.py    # Scanner alamat memory otomatis
+│   ├── memory_state.py      # Gabungan memory + vision
+│   ├── capture.py           # Screenshot game
+│   ├── vision.py            # Panggil Gemini Vision API
+│   ├── input.py             # Klik mouse otomatis
+│   ├── window.py            # Cari jendela game
+│   ├── auto_calibrate.py    # Setup alamat memory sekali jalan
+│   ├── jduel_bot/           # Library komunikasi ZMQ (opensource)
 │   ├── bots/
-│   │   ├── self_burn.py     # Example bot: activate burn + end turn
-│   │   └── ...              # Add your own bot scripts
+│   │   ├── self_burn.py     # Contoh bot: aktivasi + end turn
+│   │   └── ...              # Tambah bot lo sendiri
 │   ├── .env.example
 │   ├── requirements.txt
-│   └── run_bot.bat          # Double-click to run (Windows)
-├── README.md
+│   └── run_bot.bat          # Klik 2x buat jalan (Windows)
+├── README.md                # ← File ini
 ├── .gitignore
-└── ...old skeleton files
+└── prompts/                 # Template deck & strategi
 ```
 
 ---
 
-## Opsi LLM Provider
+## Panduan Nambahin Bot / Deck Sendiri
 
-| Provider | Model | Setup |
-|----------|-------|-------|
-| Google Gemini | `gemini-2.5-flash` | API Key dari Google AI Studio (gratis 1.500 req/hari) |
-| OpenRouter | `deepseek/deepseek-v4-flash` | API Key + top up minimal $1 |
+Biar bot main pake deck lo, edit file **`prompts/system.txt`**:
 
----
-
-## Memory Hacking (Opsi B) Details
-
-- **Teknik:** `ReadProcessMemory` via ctypes — read-only, no injection
-- **Data yang dibaca:** LP (self+opponent), Phase, Turn flag, Hand count
-- **Pattern scanning:** Cari nilai 8000 (LP awal) di process memory → cari Phase & Turn di sekitarnya
-- **Fallback:** Otomatis pindah ke vision-only kalo memory gagal
-- **Anti-cheat:** Aman — gak inject, gak write memory, gak touch game code
-
-Jalanin `python auto_calibrate.py` sekali setelah update game untuk scan ulang offsets.
-
----
-
-## Konfigurasi Deck
-
-Edit `prompts/system.txt` di repo root — deskripsi deck, kombo utama, strategi.
-
-Contoh:
 ```
 Deck: Tenpai Dragon
-Goal: OTK di Battle Phase
-Kombo: Sangen Summoning → Genroku → Kaimen → Seals → Transcendent → battle
-Prioritas: Jangan pernah negasi Maxx C sendiri
+Goal: OTK di Battle Phase secepatnya
+Strategi:
+- Pake Sangen Summoning biar bisa attack langsung
+- Summon Genroku, cari Kaimen
+- Pake Kaimen summon Seals, cari Transcendent
+- Battle phase, serang semua
+Peringatan: Jangan pernah negasi Maxx C sendiri
 ```
+
+Makin detail deskripsi deck, makin bagus keputusan LLM-nya.
 
 ---
 
-## Catatan
+## FAQ
 
-- **Bot ini membaca layar (vision) + memory (read-only)** — gak nyentuh game code.
-  Resiko banned minimal untuk solo farming.
-- **10.000+ kartu** — LLM butuh deskripsi deck yang jelas.
-  Semakin detail system prompt, semakin bagus keputusan LLM.
-- **Chain timing** — Bot detect chain prompt via mouse click positions,
-  bukan fitur anti-cheat memory.
+**Q: Apakah bot ini gak ketahuan anti-cheat?**
+A: Bot cuma baca memory (read-only, gak nulis) + screenshot layar. Gak inject code apapun. Resiko sangat rendah, apalagi kalo cuma dipake Solo Mode.
+
+**Q: Kenapa bot lemot banget?**
+A: Mungkin koneksi Gemini lambat. Cek:
+- Kalo vision-mode doang (memory gagal), tiap langkah butuh ~2 detik
+- Pastiin Master Duel window mode 1280x720
+- Kalo pake OpenRouter, latency bisa lebih tinggi
+
+**Q: Abis update Master Duel, bot error. Kenapa?**
+A: Alamat memory berubah tiap update game. Jalanin ulang:
+```
+python auto_calibrate.py --save
+```
+
+**Q: Kalo di macOS / Linux bisa?**
+A: Bisa, tapi cuma pake Vision (gak bisa memory hacking). Jalanin `python main.py` aja.
+
+**Q: Error "Master Duel window not found"?**
+A: Pastiin game udah jalan dan di window mode (bukan fullscreen). Coba minimize-restore jendela game.
+
+---
+
+## Lisensi
+
+MIT — bebas dipake, diubah, disebarin.
+Bot ini independen dan tidak berafiliasi dengan Konami atau JMaster.
