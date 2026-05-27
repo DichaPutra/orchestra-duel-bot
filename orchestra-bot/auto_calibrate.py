@@ -22,6 +22,18 @@ import logging
 import sys
 import time
 
+# Force UTF-8 encoding on standard streams to avoid Windows UnicodeEncodeErrors
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -54,6 +66,20 @@ def main():
         print(f"{RED}Memory scanner hanya berjalan di Windows.{RESET}")
         print(f"MacOS: run di Windows VM atau pake vision-only mode.")
         return
+
+    # Check for Admin privileges on Windows
+    import ctypes
+    is_admin = False
+    try:
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        pass
+
+    if not is_admin:
+        print(f"{YELLOW}⚠️  Peringatan: Script tidak berjalan sebagai Administrator!{RESET}")
+        print(f"   Jika Master Duel dijalankan oleh Steam dengan hak Administrator,")
+        print(f"   kalibrasi memori akan gagal membaca memori (No values found).")
+        print(f"   Sangat direkomendasikan untuk menjalankan CMD / GUI sebagai Administrator.\n{RESET}")
 
     # Check arguments
     args = set(sys.argv[1:])

@@ -142,7 +142,7 @@ class OrchestraGUI:
             bd=0,
             command=self.start_bot
         )
-        self.start_btn.pack(fill="x", pady=6, height=35)
+        self.start_btn.pack(fill="x", pady=6, ipady=6)
 
         # Stop Bot Button
         self.stop_btn = tk.Button(
@@ -158,7 +158,7 @@ class OrchestraGUI:
             state="disabled",
             command=self.stop_process
         )
-        self.stop_btn.pack(fill="x", pady=6, height=35)
+        self.stop_btn.pack(fill="x", pady=6, ipady=6)
 
         # Calibrate Memory Button
         self.calibrate_btn = tk.Button(
@@ -173,7 +173,7 @@ class OrchestraGUI:
             bd=0,
             command=self.run_calibration
         )
-        self.calibrate_btn.pack(fill="x", pady=6, height=35)
+        self.calibrate_btn.pack(fill="x", pady=6, ipady=6)
 
         # Clear Logs Button
         self.clear_btn = tk.Button(
@@ -188,7 +188,7 @@ class OrchestraGUI:
             bd=0,
             command=self.clear_logs
         )
-        self.clear_btn.pack(fill="x", pady=6, height=35)
+        self.clear_btn.pack(fill="x", pady=6, ipady=6)
 
         # Version stamp
         ver_lbl = tk.Label(self.sidebar, text="v1.2.0 - Hybrid Edition", fg=FG_MUTED, bg=BG_PANEL, font=("Segoe UI", 8))
@@ -314,7 +314,7 @@ class OrchestraGUI:
         provider_help.grid(row=2, column=2, sticky="w", padx=(10, 0))
 
         # Divider
-        ttk.Separator(parent, orient="horizontal").grid(row=3, column=0, columnspan=3, fill="x", pady=15)
+        ttk.Separator(parent, orient="horizontal").grid(row=3, column=0, columnspan=3, sticky="we", pady=15)
 
         # Section API Keys & Models
         sec_keys_title = tk.Label(parent, text="API KEYS & MODEL SETTINGS", fg=ACCENT_GREEN, bg=BG_PANEL, font=("Segoe UI", 11, "bold"))
@@ -380,7 +380,7 @@ class OrchestraGUI:
             curr_row += 2
 
         # Divider
-        ttk.Separator(parent, orient="horizontal").grid(row=curr_row, column=0, columnspan=3, fill="x", pady=15)
+        ttk.Separator(parent, orient="horizontal").grid(row=curr_row, column=0, columnspan=3, sticky="we", pady=15)
 
         # Save Button
         self.save_btn = tk.Button(
@@ -590,6 +590,10 @@ class OrchestraGUI:
         if os.name == 'nt':
             creation_flags = subprocess.CREATE_NO_WINDOW
 
+        # Force UTF-8 communication with child processes
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+
         try:
             self.running_process = subprocess.Popen(
                 cmd,
@@ -599,6 +603,7 @@ class OrchestraGUI:
                 encoding="utf-8",
                 errors="replace",
                 creationflags=creation_flags,
+                env=env,
                 bufsize=1
             )
             
