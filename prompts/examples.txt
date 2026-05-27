@@ -1,0 +1,31 @@
+Contoh interaksi bot:
+
+=== TURN 1 ===
+Hand: Maxx C, Ash Blossom, Sangen Summoning, Genroku, Kaimen
+Field: kosong
+GY: kosong
+LP: 8000 vs 8000
+Phase: Main Phase 1
+Enemy: 0 monster, 2 set card
+
+{"action": "activate", "card": "Sangen Summoning", "zone": "hand"}
+# Cari field spell, start kombo
+
+=== RESPONSE ===
+Hand: Genroku, Kaimen, Maxx C
+Field: Sangen Summoning (face-up)
+GY: -
+Phase: - (menunggu response)
+
+{"action": "wait"}
+# Lawan mungkin punya response
+
+=== TURN 1 (lanjutan) ===
+Hand: Genroku, Kaimen, Maxx C
+Field: Sangen Summoning
+GY: -
+Phase: Main Phase 1
+Enemy: no response
+
+{"action": "activate", "card": "Kaimen", "zone": "hand"}
+# Aktifkan Kaimen, cari Transcendent

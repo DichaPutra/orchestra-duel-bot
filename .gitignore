@@ -1,0 +1,21 @@
+.env
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+*.spec
+logs/
+*.log
+screenshots/
+# Kalo bundle jadi exe
+*.exe
+# Memory offsets (auto-generated, specific to game version)
+orchestra-bot/memory_offsets.txt
+
+# JMaster binaries (copyrighted, not part of open source bot)
+jmaster_raw/
+jmaster_app*.zip
+cfr.jar
+*.jar
+Bot-Utilities.exe
