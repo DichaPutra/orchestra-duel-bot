@@ -19,7 +19,10 @@ from pathlib import Path
 from typing import Optional
 
 # Import the advanced scanner utilities
-from . import memory_scanner
+try:
+    import memory_scanner
+except ImportError:
+    from . import memory_scanner
 
 logger = logging.getLogger("orchestra.memory")
 

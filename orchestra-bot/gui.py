@@ -382,22 +382,43 @@ class OrchestraGUI:
         # Divider
         ttk.Separator(parent, orient="horizontal").grid(row=curr_row, column=0, columnspan=3, sticky="we", pady=15)
 
+        # Frame untuk menampung tombol aksi secara horizontal
+        btn_action_frame = tk.Frame(parent, bg=BG_PANEL)
+        btn_action_frame.grid(row=curr_row+1, column=0, columnspan=3, sticky="w", pady=(5, 20), padx=(10, 0))
+
         # Save Button
         self.save_btn = tk.Button(
-            parent,
+            btn_action_frame,
             text="💾 SIMPAN KONFIGURASI",
             bg=ACCENT_BLUE,
             fg="#ffffff",
             activebackground="#2563eb",
             activeforeground="#ffffff",
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
             relief="flat",
             bd=0,
             command=self.save_settings,
-            padx=20,
+            padx=15,
             pady=8
         )
-        self.save_btn.grid(row=curr_row+1, column=0, columnspan=2, sticky="w", pady=(5, 20), padx=(10, 0))
+        self.save_btn.pack(side="left", padx=(0, 10))
+
+        # Test Button
+        self.test_btn = tk.Button(
+            btn_action_frame,
+            text="🧪 TEST KONEKSI LLM",
+            bg=ACCENT_PURPLE,
+            fg="#ffffff",
+            activebackground="#7c3aed",
+            activeforeground="#ffffff",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            bd=0,
+            command=self.test_llm_connection,
+            padx=15,
+            pady=8
+        )
+        self.test_btn.pack(side="left")
 
     def toggle_key_visibility(self, env_key, entry_widget):
         """Toggle mask/unmask of API keys."""
@@ -507,6 +528,130 @@ class OrchestraGUI:
         except Exception as e:
             self.append_log(f"[GUI ERROR] Gagal menulis berkas .env: {e}\n")
             messagebox.showerror("Error", f"Gagal menyimpan konfigurasi: {e}")
+
+    def test_llm_connection(self):
+        """Test calling the LLM endpoint to verify API key & model settings."""
+        provider = self.llm_provider_val.get().strip().lower()
+        key = ""
+        model = ""
+        default_model = ""
+
+        if provider == "gemini":
+            key = self.key_entries.get("GEMINI_API_KEY").get().strip()
+            model = self.model_entries.get("GEMINI_MODEL").get().strip()
+            default_model = "gemini-2.5-flash"
+        elif provider == "openai":
+            key = self.key_entries.get("OPENAI_API_KEY").get().strip()
+            model = self.model_entries.get("OPENAI_MODEL").get().strip()
+            default_model = "gpt-4o-mini"
+        elif provider == "openrouter":
+            key = self.key_entries.get("OPENROUTER_API_KEY").get().strip()
+            model = self.model_entries.get("OPENROUTER_MODEL").get().strip()
+            default_model = "google/gemini-2.5-flash"
+        elif provider == "groq":
+            key = self.key_entries.get("GROQ_API_KEY").get().strip()
+            model = self.model_entries.get("GROQ_MODEL").get().strip()
+            default_model = "llama3-70b-8192"
+        elif provider == "deepseek":
+            key = self.key_entries.get("DEEPSEEK_API_KEY").get().strip()
+            model = self.model_entries.get("DEEPSEEK_MODEL").get().strip()
+            default_model = "deepseek-chat"
+
+        if not key:
+            messagebox.showerror("Error", f"API Key untuk {provider.upper()} masih kosong!")
+            return
+
+        if not model:
+            model = default_model
+
+        # Disable button and update text
+        self.test_btn.configure(state="disabled", text="⏳ TESTING...")
+        self.append_log(f"[GUI] Memulai pengujian LLM Provider: {provider.upper()} dengan model {model}...\n")
+
+        # Run connection test in a separate thread so GUI doesn't freeze
+        threading.Thread(
+            target=self._run_llm_test_thread,
+            args=(provider, key, model),
+            daemon=True
+        ).start()
+
+    def _run_llm_test_thread(self, provider, key, model):
+        """Thread worker to make the actual HTTP call to the selected provider."""
+        import requests
+        success = False
+        message = ""
+        try:
+            if provider == "gemini":
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+                payload = {
+                    "contents": [{
+                        "parts": [{"text": "Respond with only the word: OK"}]
+                    }]
+                }
+                resp = requests.post(url, json=payload, timeout=15)
+                if resp.status_code == 200:
+                    ai_resp = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    success = True
+                    message = f"Sukses terkoneksi ke Gemini!\nRespon Model: {ai_resp}"
+                else:
+                    try:
+                        err_json = resp.json()
+                        err_msg = err_json.get("error", {}).get("message", resp.text)
+                    except Exception:
+                        err_msg = resp.text
+                    message = f"Gagal (Status {resp.status_code}): {err_msg}"
+
+            elif provider in ("openai", "deepseek", "openrouter", "groq"):
+                if provider == "openai":
+                    url = "https://api.openai.com/v1/chat/completions"
+                elif provider == "deepseek":
+                    url = "https://api.deepseek.com/chat/completions"
+                elif provider == "openrouter":
+                    url = "https://openrouter.ai/api/v1/chat/completions"
+                else:  # groq
+                    url = "https://api.groq.com/openai/v1/chat/completions"
+
+                headers = {
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "Respond with only the word: OK"}],
+                    "temperature": 0.2
+                }
+                resp = requests.post(url, headers=headers, json=payload, timeout=15)
+                if resp.status_code == 200:
+                    ai_resp = resp.json()["choices"][0]["message"]["content"].strip()
+                    success = True
+                    message = f"Sukses terkoneksi ke {provider.upper()}!\nRespon Model: {ai_resp}"
+                else:
+                    try:
+                        err_json = resp.json()
+                        err_msg = err_json.get("error", {}).get("message", resp.text)
+                    except Exception:
+                        err_msg = resp.text
+                    message = f"Gagal (Status {resp.status_code}): {err_msg}"
+            else:
+                message = f"Provider tidak didukung: {provider}"
+
+        except requests.exceptions.Timeout:
+            message = "Gagal terkoneksi: Batas waktu (timeout) habis. Periksa koneksi internet Anda."
+        except Exception as e:
+            message = f"Error tidak terduga: {str(e)}"
+
+        # Safely return back to the main thread
+        self.root.after(0, self._on_llm_test_complete, success, message)
+
+    def _on_llm_test_complete(self, success, message):
+        """Callback to run on main thread when LLM test finishes."""
+        self.test_btn.configure(state="normal", text="🧪 TEST KONEKSI LLM")
+        if success:
+            self.append_log(f"[GUI] Uji LLM Berhasil: {message.replace('\n', ' ')}\n")
+            messagebox.showinfo("Koneksi Sukses", message)
+        else:
+            self.append_log(f"[GUI ERROR] Uji LLM Gagal: {message.replace('\n', ' ')}\n")
+            messagebox.showerror("Koneksi Gagal", message)
 
     def append_log(self, text):
         """Append text to the console display widget."""
