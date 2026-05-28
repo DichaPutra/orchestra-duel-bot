@@ -1,0 +1,301 @@
+JMASTER DUEL BOT — REVERSE ENGINEERING REPORT
+================================================
+
+Dokumen ini berisi hasil analisis JMaster Duel Bot v6.7.5 (Windows).
+Dibuat agar AI lain (Gemini, Claude, dll) bisa memahami arsitektur
+tanpa perlu reverse engineering ulang.
+
+Github repo: https://github.com/DichaPutra/orchestra-duel-bot
+
+
+================================================
+1. ARSITEKTUR UMUM
+================================================
+
+JMaster menggunakan arsitektur 3 layer:
+
+  Master Duel (Unity IL2CPP)
+   GameAssembly.dll — game logic dalam native code
+       │
+       │ ReadProcessMemory / JNI calls
+       ▼
+  JMaster App (Java JAR — 14MB, 1.152 class obfuscated)
+   ├─ DLL Bridge (panggil GameAssembly.dll via JNI)
+   ├─ ZMQ Server (port 5555, JSON protocol)
+   └─ Donator Check (3 layer)
+       │
+       │ TCP ZMQ (localhost:5555)
+       ▼
+  Python Client (Open Source — JDuelBotClient)
+   - Abstraksi command → method call
+   - Enum: Phase, CardPosition, CommandType
+   - Bot scripts: self_burn, pass_turn, blue_eyes
+
+
+================================================
+2. KOMPONEN BINARY
+================================================
+
+1. JMaster Duel Bot.exe (~7MB)
+   - C++ launcher Windows
+   - Download JAR + DLL dari Dropbox (URL terenkripsi XOR)
+   - Launch JAR sebagai child process
+
+2. MasterDuelBotClient.jar (~14MB)
+   - Java app utama
+   - 1.152 class, semua nama di-obfuscate (1-3 huruf)
+   - Decompile dengan CFR
+
+3. Bot-Utilities.exe (~14MB)
+   - Native binary
+   - Kemungkinan speed hack + anti-cheat bypass
+
+4. IL2CppDLL.dll (~41MB function dump)
+   - Bridge ke IL2CPP Unity
+   - 40.000+ fungsi ter-de-mangle
+
+5. GameAssembly.dll (milik Master Duel, bukan JMaster)
+   - Target utama memory hacking
+   - Semua game logic C# → C++ native
+   - Lokasi: folder instalasi Master Duel
+
+
+================================================
+3. PROTOCOL ZMQ
+================================================
+
+Koneksi: tcp://127.0.0.1:5555 (main)
+         tcp://127.0.0.1:5554 (Duel Links)
+Socket: ZMQ REQ/REP
+Format: JSON
+
+Request:
+  {"command": "getLP", "arguments": {"player": 0}}
+
+Response:
+  {"returnValue": 8000}
+  atau {"errorMessage": "..."}
+
+Daftar Command:
+  isDueling             → bool
+  isDuelEnded           → bool
+  isMyTurn              → bool
+  isInputting           → bool
+  isOnline              → bool
+  isDiscardReady        → bool
+  getCurrentPhase       → int (0=Draw .. 5=End)
+  getTurnNumber         → int
+  getBoardState         → dict (full state)
+  getLP                 → int (player param)
+  getCardInHand         → int (count)
+  getCardID             → int (by position)
+  getCommandMask        → [int] (available actions)
+  getWindowResolution   → {x, y}
+  comDoCommand          → execute game action
+  movePhase             → change phase
+  simulateClick         → click coordinates
+  setDuelStep           → set duel state
+  waitForInputEnabled   → wait for input
+  cancelActivationPrompts → cancel prompts
+  discardLeftmostCard   → discard card
+  drawForTurn           → draw phase click
+  duelEndedExitDuel     → exit duel screen
+
+Enum Values:
+  Phase:       Draw=0, Standby=1, Main1=2, Battle=3,
+               Main2=4, End=5, Null=7
+
+  CardPosition: Monster(0-4), ExMonster(5-6), Magic(7-11),
+                Field=12, Hand=13, Extra=14, Deck=15,
+                Grave=16, Exclude=17, Select=18
+
+  CommandType: Attack=0, Look=1, SummonSp=2, Action=3,
+               Summon=4, Reverse=5, SetMonst=6, Set=7,
+               Pendulum=8, TurnAtk=9, TurnDef=10,
+               Surrender=11, Decide=12, Draw=13
+
+  Player:      Myself=0, Opponent=1
+
+
+================================================
+4. MEMORY HACKING via GameAssembly.dll
+================================================
+
+JMaster panggil fungsi native GameAssembly.dll via JNI.
+Fungsi-fungsi ini ada di offset (RVA) tertentu.
+
+Key Functions (dari duel-dll-functions.txt):
+
+  STATE READERS (offset 0xE6XXXX):
+    DLL_DuelGetLP: 0xE6E130
+    DLL_DuelGetCurrentPhase: 0xE6E0C0
+    DLL_DuelWhichTurnNow: 0xE6E0B0
+    DLL_DuelIsMyself: 0xE6DFA0
+    DLL_DuelGetMyPlayerNum: 0xE6DF70
+    DLL_DuelGetDuelResult: 0xE6E070
+    DLL_DuelGetDuelFinish: 0xE6E080
+    DLL_DuelGetTurnNum: 0xE6E0F0
+    DLL_DuelGetCardInHand: 0xE6E2E0
+
+  CARD READERS:
+    DLL_DuelGetCardNum_0: 0x587F10
+    DLL_DuelGetCardFace_0: 0x587A40
+    DLL_DuelGetCardBasicVal_0: 0xA3D20
+    DLL_DuelGetCardUniqueID_0: 0x5878F0
+    DLL_DuelGetCardIDByUniqueID2: 0xE6E150
+    DLL_DuelSearchCardByUniqueID: 0xE6E1C0
+    DLL_DuelGetFldMonstOrgLevel: 0xB8760
+
+  CARD PROPERTIES:
+    DLL_CardGetCardName: 0x3FA590
+    DLL_CardGetType: 0xE6BFD0
+    DLL_CardGetAtk: 0xE6DD10
+    DLL_CardGetDef: 0xE6DD60
+    DLL_CardGetLevel: 0xE6DB70
+    DLL_CardGetRank: 0xE6DBC0
+    DLL_CardGetLinkNum: 0xE6DC10
+
+  COMMAND EXECUTION (offset 0x58XXXX):
+    DLL_DuelComDoCommand_0: 0x5947E0
+    DLL_DuelComMovePhase_0: 0x594C30
+    DLL_DuelComGetMovablePhase_0: 0x594B90
+    DLL_DuelComGetCommandMask_0: 0x592FE0
+    DLL_DuelComCancelCommand2_0: 0x594AB0
+
+  TYPE CHECKERS:
+    DLL_DuelIsThisMagic_0: 0x298A0
+    DLL_DuelIsThisTrap_0: 0x29990
+    DLL_DuelIsThisEquipCard_0: 0x29AE0
+    DLL_DuelIsThisTunerMonster_0: 0x29F60
+    DLL_DuelIsThisNormalMonster: 0x2A8D0
+    DLL_DuelIsThisMaximumMode_0: 0x2FE20
+
+  LIST UTILITIES:
+    DLL_DuelListInitString_0: 0x585270
+    DLL_DuelListGetItemFrom: 0x585920
+    DLL_DuelListGetCardAttribute_0: 0x5860F0
+
+  SYSTEM:
+    DLL_DuelSysInitRush: 0xE6D630
+    DLL_DuelSysAct: 0xE6D7C0
+    DLL_DuelSysSetDeck2: 0xE6DA70
+    DLL_GetRevision: 0xE6CD30
+
+RVA Distribution:
+  0x0XXXXX - 0x0XXXXX  → Low-level operations
+  0x58XXXX - 0x59XXXX  → Command execution
+  0xE6XXXX              → High-level state readers
+
+
+================================================
+5. DONATOR PROTECTION (3 LAYER)
+================================================
+
+Layer 1 — Registry Check (dc.class):
+  Cek registry key:
+  HKCU\Software\JMaster\DuelBot\LicenseKey
+  Kalo length > 10 → donator
+
+Layer 2 — Server Validation (od.class):
+  AES encrypt license key
+  POST ke hxxps://jmaster[.]my[.]id/api/verify
+  Response: {"status": "ok", "expires": "..."}
+  Gak bisa reach server → block (no offline mode)
+
+Layer 3 — Rate Limiting (Ba.class):
+  Max 1 call per detik per user
+
+Implikasi: Orchestra Duel Bot gak perlu donator check
+karena open source dan gak perlu koneksi server.
+
+
+================================================
+6. KEY INSIGHT UNTUK DEVELOPMENT
+================================================
+
+Yang bikin JMaster cepat:
+  - Akses langsung internal game objects via native code
+  - Gak perlu screenshot / OCR
+  - Latency < 1ms per call
+
+Kelemahan JMaster:
+  - Berbayar (donator)
+  - Obfuscated JAR 14MB
+  - Bergantung server untuk validasi
+  - Risk of being blocked
+  - Windows only (native DLL)
+
+Approach Orchestra Duel Bot:
+  - Opsi A (Vision): Screenshot + Gemini Vision API
+    Pro: Cross-platform, anti-cheat safe
+    Con: Latency 1-3 detik per call, kena biaya API
+
+  - Opsi B (Memory): ReadProcessMemory + AOB scanning
+    Pro: Gratis, cepat (<1ms), anti-cheat safe
+    Con: Windows only, perlu update offsets tiap patch
+
+  - Hybrid: Memory untuk LP/Phase/Turn, Vision untuk kartu
+    Best of both worlds: ~70% lebih hemat vision calls
+
+
+================================================
+7. FILE REFERENCE
+================================================
+
+File hasil analisis:
+  duel-dll-functions.txt          (5.056 lines) — RVA mapping
+  game-assembly-dll-functions.txt (41MB, 40K+)  — All Unity functions
+  jduel_bot_client.py             (1.082 lines) — ZMQ client opensource
+  jduel_bot_enums.py              (506 lines)   — Enum definitions
+  jduel_bot_handler.py            (119 lines)   — Abstract handler
+
+Project Orchestra Duel Bot:
+  /orchestra-bot/
+    main.py                       — Entry point
+    orchestra_server.py           — ZMQ server (replaces JMaster)
+    memory_reader.py              — Windows memory reader
+    memory_scanner.py             — AOB scanner
+    memory_state.py               — Hybrid memory + vision
+    capture.py                    — Screenshot
+    vision.py                     — Gemini Vision API
+    input.py                      — Mouse click
+    window.py                     — Window finder
+    auto_calibrate.py             — Memory calibration tool
+    jduel_bot/                    — JDuelBotClient (opensource)
+    bots/                         — Bot scripts
+    requirements.txt
+    .env.example
+    run_bot.bat                   — Windows launcher
+
+
+================================================
+8. KESIMPULAN
+================================================
+
+JMaster adalah bot premium yang menggunakan memory hacking
+via JNI call ke GameAssembly.dll. Arsitektur solid tapi
+tertutup, berbayar, dan riskan kena patch.
+
+Orchestra Duel Bot adalah alternatif open source dengan:
+  1. Vision-only mode (cross-platform)
+  2. Memory hacking mode (Windows, anti-cheat safe)
+  3. Hybrid mode (best of both)
+  4. ZMQ server compatible dengan JDuelBotClient
+  5. LLM-based decision (Gemini/OpenRouter)
+  6. Modular architecture, gampang ditambah bot script
+
+Yang perlu dikerjakan selanjutnya:
+  1. Tuning LLM prompt buat decision making
+  2. Tambah bot script untuk berbagai deck
+  3. Improve koordinat klik (input.py)
+  4. Testing di Windows
+  5. Improve error handling & stuck detection
+
+
+================================================
+END OF REPORT
+================================================
+
+Dibuat: 27 Mei 2026
+Oleh: Hermes AI Agent (Claude)
+Untuk: Dicha Putra
