@@ -89,7 +89,7 @@ class OrchestraServer:
             "isDuelEnded": self._cmd_is_duel_ended,
             "isMyTurn": self._cmd_is_my_turn,
             "isInputting": self._cmd_is_inputting,
-            "getCurrentPhase": self._cmd_get_current_phase,
+            "getCurrentPhase": self._cmd_getCurrentPhase,
             "getBoardState": self._cmd_get_board_state,
             "getLP": self._cmd_get_lp,
             "getCardID": self._cmd_get_card_id,
@@ -299,6 +299,24 @@ class OrchestraServer:
             if state:
                 return {"returnValue": state.get("DUEL_ENDED", False)}
         return {"returnValue": False}
+
+    def _cmd_getCurrentPhase(self, args) -> dict:
+        """Dapetin phase sekarang (Memory + Vision fallback)."""
+        if self.memory_state is not None:
+            phase = self.memory_state.read_phase()
+            if phase is not None and 0 <= phase <= 7:
+                return {"returnValue": phase}
+        if MODE == "hybrid":
+            state = self._get_vision_state()
+            if state:
+                phase_str = (state.get("CURRENT_PHASE", "") or "").lower().strip()
+                phase_names = {
+                    "draw": 0, "standby": 1, "main 1": 2, "main1": 2,
+                    "main phase 1": 2, "battle": 3, "main 2": 4, "main2": 4,
+                    "main phase 2": 4, "end": 5,
+                }
+                return {"returnValue": phase_names.get(phase_str, 2)}
+        return {"returnValue": enums.Phase.Main1.value}
 
     def _cmd_is_my_turn(self, args) -> dict:
         """Cek apakah giliran kita (Memory + Vision fallback)."""

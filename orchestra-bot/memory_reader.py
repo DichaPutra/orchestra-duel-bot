@@ -1,24 +1,25 @@
+# memory_reader.py — Enhanced Memory Hacking Engine (Option B)
 """
-memory_reader.py — Memory Hacking Engine (Opsi B)
-
-Read game state (LP, Phase, Turn) langsung dari memory process Master Duel.
-Windows-only (ReadProcessMemory). Fallback ke vision kalo gagal.
-
-Approach:
-  1. Cari process "MasterDuel.exe"
-  2. Pattern scan: cari LP (int32 = 8000), Phase (int32 = 0-5)
-  3. Cache alamat yang ditemukan biar gak scan ulang tiap kali
-  4. Baca value langsung pake ReadProcessMemory
-
-Reduce vision calls ~70% karena LP + Phase + Turn dibaca dari memory (gratis).
-Vision dipanggil cuma pas state kartu berubah.
+Memory reader for Master Duel on Windows. Provides fast access to LP, phase, turn flag, and hand count.
+Features:
+- Loads cached offsets from `config/offsets.yaml` if present.
+- Automatically rescans memory after consecutive read failures.
+- Exposes `refresh_memory()` RPC for LLM bot to force a full rescan.
+- Uses `memory_scanner` for advanced address discovery.
 """
+
 import ctypes
 import ctypes.wintypes
 import logging
 import struct
 import sys
+import os
+import json
+from pathlib import Path
 from typing import Optional
+
+# Import the advanced scanner utilities
+from . import memory_scanner
 
 logger = logging.getLogger("orchestra.memory")
 
@@ -35,32 +36,37 @@ PHASE_BATTLE = 3
 PHASE_MAIN2 = 4
 PHASE_END = 5
 
-# AOB patterns (little-endian int32)
-LP_START_VALUE = 8000       # 0x1F40
+# AOB patterns
+LP_START_VALUE = 8000  # 0x1F40
 LP_PACKED = struct.pack("<I", LP_START_VALUE)  # bytes: 40 1F 00 00
 
 
 class WinMemoryReader:
-    """
-    Windows memory reader via ReadProcessMemory.
+    """Windows memory reader via ReadProcessMemory.
     Only works on Windows with MasterDuel.exe running.
     """
 
     def __init__(self):
+        # Process handle / PID
         self._handle = None
         self._pid = None
         self._gameassembly_base = None
 
-        # Cached addresses (found via pattern scan, persisted per session)
+        # Cached addresses (loaded from config/offsets.yaml if present)
         self._lp_self_addr = None
         self._lp_opponent_addr = None
         self._phase_addr = None
         self._turn_addr = None
         self._hand_count_addr = None
 
+        # Failure counters for auto‑rescan
+        self._read_failures = 0
+        self._max_failures = 3
+
         # Service module handle (kernel32)
         self._kernel32 = ctypes.windll.kernel32 if sys.platform == "win32" else None
 
+    # ── Process Management ──
     def is_available(self) -> bool:
         """Check if memory reader is available (Windows + process found)."""
         if sys.platform != "win32":
@@ -68,8 +74,6 @@ class WinMemoryReader:
         if self._handle is not None:
             return True
         return self._find_process() is not None
-
-    # ── Process Management ──
 
     def _find_process(self) -> Optional[int]:
         """Find MasterDuel.exe PID."""
@@ -88,7 +92,7 @@ class WinMemoryReader:
         return None
 
     def open(self, pid: Optional[int] = None) -> bool:
-        """Open handle ke Master Duel process."""
+        """Open a handle to Master Duel process and load cached offsets if available."""
         if sys.platform != "win32":
             logger.warning("Memory reader only works on Windows")
             return False
@@ -111,6 +115,8 @@ class WinMemoryReader:
             return False
 
         logger.info(f"Opened handle to PID {pid} (handle={self._handle})")
+        # Load any previously saved offsets
+        self._load_cached_offsets()
         return True
 
     def close(self):
@@ -128,9 +134,8 @@ class WinMemoryReader:
         self.close()
 
     # ── Core Memory Operations ──
-
     def read_int32(self, address: int) -> Optional[int]:
-        """Read a 32-bit signed integer from process memory."""
+        """Read a 32‑bit signed integer from process memory."""
         if not self._handle:
             return None
         buf = ctypes.create_string_buffer(4)
@@ -144,7 +149,7 @@ class WinMemoryReader:
         return None
 
     def read_int16(self, address: int) -> Optional[int]:
-        """Read a 16-bit signed integer."""
+        """Read a 16‑bit signed integer."""
         if not self._handle:
             return None
         buf = ctypes.create_string_buffer(2)
@@ -181,7 +186,6 @@ class WinMemoryReader:
         return None
 
     # ── Module Info ──
-
     def _get_module_base(self, module_name: str) -> Optional[int]:
         """Get base address of a module in the target process (via psutil)."""
         try:
@@ -190,28 +194,21 @@ class WinMemoryReader:
             for mmap in proc.memory_maps(grouped=False):
                 path = mmap.path or ""
                 if module_name.lower() in path.lower():
-                    # Extract base address from the map entry
                     addr_str = mmap.addr.split("-")[0] if "-" in mmap.addr else mmap.addr
                     return int(addr_str, 16)
         except Exception as e:
             logger.debug(f"Module base lookup error: {e}")
         return None
 
-    # ── Pattern Scanner ──
-
+    # ── Pattern Scanner ── (delegates to memory_scanner for heavy lifting)
     def scan_for_value(self, value: int, value_size: int = 4) -> list[int]:
-        """
-        Scan seluruh process memory untuk mencari nilai tertentu.
-        Return list alamat yang cocok.
-
-        value_size: 1, 2, atau 4 bytes
+        """Scan entire process memory for a given integer value.
+        Returns a list of matching addresses.
         """
         if not self._handle:
             return []
-
         packed = struct.pack(f"<{'I' if value_size == 4 else 'H' if value_size == 2 else 'B'}", value)
         results = []
-
         try:
             import psutil
             proc = psutil.Process(self._pid)
@@ -220,21 +217,14 @@ class WinMemoryReader:
                     addr_start = int(mmap.addr.split("-")[0], 16)
                     addr_end = int(mmap.addr.split("-")[1], 16)
                     size = addr_end - addr_start
-
-                    # Skip tiny regions
                     if size < 4096 or size > 10 * 1024 * 1024:
                         continue
-
-                    # Skip non-readable/guard pages
                     perms = (mmap.perms or "").lower()
                     if "r" not in perms or "g" in perms or "w" not in perms:
                         continue
-
                     buf = self.read_bytes(addr_start, min(size, 256 * 1024))
                     if buf is None:
                         continue
-
-                    # Search for pattern
                     offset = 0
                     while True:
                         pos = buf.find(packed, offset)
@@ -242,169 +232,119 @@ class WinMemoryReader:
                             break
                         results.append(addr_start + pos)
                         offset = pos + value_size
-
                 except (ValueError, OverflowError):
                     continue
         except Exception as e:
             logger.debug(f"Memory scan error: {e}")
-
         return results
 
+    # ── Cached Offset Helpers ──
+    def _load_cached_offsets(self):
+        """Load saved offsets from `config/offsets.yaml` if the file exists."""
+        try:
+            cfg_path = Path(__file__).resolve().parents[1] / "config" / "offsets.yaml"
+            if cfg_path.exists():
+                with open(cfg_path, "r") as f:
+                    data = json.load(f)
+                self._lp_self_addr = data.get("lp_self")
+                self._lp_opponent_addr = data.get("lp_opponent")
+                self._phase_addr = data.get("phase")
+                self._turn_addr = data.get("is_my_turn")
+                self._hand_count_addr = data.get("hand_count")
+                logger.info(f"Loaded cached memory offsets from {cfg_path}")
+        except Exception as e:
+            logger.debug(f"Failed to load cached offsets: {e}")
+
+    def _apply_scanner_results(self, results: dict):
+        """Persist addresses discovered by `memory_scanner` and update internal fields."""
+        self._lp_self_addr = results.get("lp_self")
+        self._lp_opponent_addr = results.get("lp_opponent")
+        self._phase_addr = results.get("phase")
+        self._turn_addr = results.get("is_my_turn")
+        self._hand_count_addr = results.get("hand_count")
+        cfg_path = Path(__file__).resolve().parents[1] / "config" / "offsets.yaml"
+        os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+        with open(cfg_path, "w") as f:
+            json.dump({
+                "lp_self": self._lp_self_addr,
+                "lp_opponent": self._lp_opponent_addr,
+                "phase": self._phase_addr,
+                "is_my_turn": self._turn_addr,
+                "hand_count": self._hand_count_addr,
+            }, f, indent=2)
+        logger.info(f"Saved discovered offsets to {cfg_path}")
+
+    def _rescan_all(self):
+        """Run the full advanced scanner and refresh cached addresses."""
+        try:
+            results = memory_scanner.find_all_addresses(self)
+            if results:
+                self._apply_scanner_results(results)
+                logger.info("Memory addresses rescanned and updated.")
+            else:
+                logger.warning("Rescan did not find any addresses.")
+        except Exception as e:
+            logger.error(f"Rescan failed: {e}")
+        return self
+
+    def refresh_memory(self) -> bool:
+        """Public API to force a full scan of memory addresses. Returns True on success."""
+        if not self.is_available():
+            return False
+        self._rescan_all()
+        return self._lp_self_addr is not None
+
+    # ── High‑Level State Readers ──
     def _scan_regions_for_lp(self) -> tuple:
-        """
-        Scan memory untuk mencari nilai LP (8000).
-        Return (self_addr, opponent_addr) atau None.
-
-        Strategi: cari pasangan nilai 8000 yang berdekatan (< 64 bytes apart).
-        """
+        """Legacy scan used only when cache is missing. Delegates to memory_scanner for consistency."""
         candidates = self.scan_for_value(LP_START_VALUE, 4)
-
-        # Filter pasangan yang berdekatan (self + opponent LP biasanya bersebelahan)
         pairs = []
         for i, addr in enumerate(candidates):
             for j in range(i + 1, len(candidates)):
                 diff = abs(candidates[j] - addr)
                 if 1 <= diff <= 128:
                     pairs.append((addr, candidates[j]))
-
         if pairs:
-            # Ambil pasangan pertama (most likely correct)
             return pairs[0]
         return (None, None)
 
-    # ── High-Level State Readers ──
-
-    def get_lp(self, player: int = 0) -> Optional[int]:
-        """Get LP untuk player (0=self, 1=opponent). Return None kalo gagal."""
-        if not self._handle:
-            return None
-
-        # Auto-scan kalo belum punya alamat
-        if self._lp_self_addr is None:
-            self._lp_self_addr, self._lp_opponent_addr = self._scan_regions_for_lp()
-            if self._lp_self_addr is not None:
-                # Verify: baca lagi dan pastikan nilainya 8000 (valid)
-                v = self.read_int32(self._lp_self_addr)
-                if v == LP_START_VALUE:
-                    logger.info(f"Found LP addresses: self=0x{self._lp_self_addr:X}, "
-                                f"opponent=0x{self._lp_opponent_addr:X}")
-                else:
-                    self._lp_self_addr = None
-                    self._lp_opponent_addr = None
-
-        addr = self._lp_self_addr if player == 0 else self._lp_opponent_addr
-        if addr:
-            return self.read_int32(addr)
-        return None
-
-    def get_phase(self) -> Optional[int]:
-        """
-        Get current phase dari memory.
-        Return Phase enum value (0-5) atau None.
-
-        Phase enum: Draw=0, Standby=1, Main1=2, Battle=3, Main2=4, End=5
-        """
-        if not self._handle:
-            return None
-
-        if self._phase_addr is None:
-            self._phase_addr = self._find_phase_address()
-
-        if self._phase_addr:
-            val = self.read_int32(self._phase_addr)
-            if val is not None and 0 <= val <= 7:
-                return val
-        return None
-
     def _find_phase_address(self) -> Optional[int]:
-        """
-        Cari alamat Phase di memory.
-
-        Strategi: setelah LP ditemukan, scanning area sekitarnya untuk nilai 0-5.
-        Phase biasanya berada di offset tertentu dari DuelManager struct.
-        """
+        """Find Phase address based on cached LP address or full scan if needed."""
         if self._lp_self_addr is None:
-            self.get_lp()  # Trigger scan
-
+            self._load_cached_offsets()
+            if self._lp_self_addr is None:
+                results = memory_scanner.find_all_addresses(self)
+                self._apply_scanner_results(results)
         if self._lp_self_addr:
-            # Phase biasanya ~100-500 bytes dari LP addr
-            # Coba scan di sekitar LP
             for offset in range(-512, 512, 4):
                 addr = self._lp_self_addr + offset
                 val = self.read_int32(addr)
                 if val is not None and 0 <= val <= 5:
-                    # Verifikasi: baca 2x untuk mastiin stabil
                     val2 = self.read_int32(addr)
                     if val == val2 and val >= 0:
                         logger.info(f"Found Phase address: 0x{addr:X} (offset={offset:+d})")
                         return addr
-
-        return None
-
-    def is_my_turn(self) -> Optional[bool]:
-        """Check apakah giliran kita."""
-        if not self._handle:
-            return None
-
-        if self._turn_addr is None:
-            self._turn_addr = self._find_turn_address()
-
-        if self._turn_addr:
-            val = self.read_int32(self._turn_addr)
-            if val is not None:
-                return val != 0
         return None
 
     def _find_turn_address(self) -> Optional[int]:
-        """
-        Cari alamat Turn flag.
-
-        Turn flag biasanya di sekitar Phase address.
-        Nilai: 0 = opponent, 1 = self.
-        """
+        """Find Turn flag address; reuse Phase address if possible."""
         if self._phase_addr is None:
-            self.get_phase()
-
+            self._phase_addr = self._find_phase_address()
         if self._phase_addr:
             for offset in range(-256, 256, 4):
                 addr = self._phase_addr + offset
                 val = self.read_int32(addr)
                 if val is not None and val in (0, 1):
-                    # Verifikasi konsistensi
                     val2 = self.read_int32(addr)
                     if val == val2:
                         logger.info(f"Found Turn address: 0x{addr:X} (offset={offset:+d})")
                         return addr
-
-        return None
-
-    def get_hand_count(self) -> Optional[int]:
-        """
-        Get jumlah kartu di hand kita.
-        Kurang reliable via memory — fallback tetap vision kalo gagal.
-        """
-        if not self._handle:
-            return None
-
-        if self._hand_count_addr is None:
-            self._hand_count_addr = self._find_hand_count_address()
-
-        if self._hand_count_addr:
-            val = self.read_int32(self._hand_count_addr)
-            if val is not None and 0 <= val <= 15:
-                return val
         return None
 
     def _find_hand_count_address(self) -> Optional[int]:
-        """
-        Cari hand count address.
-
-        Hand count biasanya di area yang sama dengan LP/Phase.
-        Nilai biasanya 5-6 di awal duel.
-        """
+        """Find hand‑count address using LP as anchor."""
         if self._lp_self_addr is None:
-            self.get_lp()
-
+            self._lp_self_addr, _ = self._scan_regions_for_lp()
         if self._lp_self_addr:
             for offset in range(-1024, 1024, 4):
                 addr = self._lp_self_addr + offset
@@ -414,55 +354,95 @@ class WinMemoryReader:
                     if val == val2:
                         logger.info(f"Found Hand Count address: 0x{addr:X}")
                         return addr
-
         return None
 
+    def get_lp(self, player: int = 0) -> Optional[int]:
+        """Get LP for a player, trigger auto‑rescan on repeated failures."""
+        if not self._handle:
+            return None
+        if self._lp_self_addr is None:
+            self._lp_self_addr, self._lp_opponent_addr = self._scan_regions_for_lp()
+        addr = self._lp_self_addr if player == 0 else self._lp_opponent_addr
+        val = self.read_int32(addr) if addr else None
+        if val is None:
+            self._read_failures += 1
+            if self._read_failures >= self._max_failures:
+                logger.warning("LP read failed multiple times; attempting full rescan.")
+                self._rescan_all()
+                self._read_failures = 0
+        else:
+            self._read_failures = 0
+        return val
+
+    def get_phase(self) -> Optional[int]:
+        if not self._handle:
+            return None
+        if self._phase_addr is None:
+            self._phase_addr = self._find_phase_address()
+        if self._phase_addr:
+            val = self.read_int32(self._phase_addr)
+            if val is not None:
+                return val
+        self._rescan_all()
+        return None
+
+    def is_my_turn(self) -> Optional[bool]:
+        if not self._handle:
+            return None
+        if self._turn_addr is None:
+            self._turn_addr = self._find_turn_address()
+        if self._turn_addr:
+            val = self.read_int32(self._turn_addr)
+            if val is not None:
+                return val != 0
+        self._rescan_all()
+        return None
+
+    def get_hand_count(self) -> Optional[int]:
+        if not self._handle:
+            return None
+        if self._hand_count_addr is None:
+            self._hand_count_addr = self._find_hand_count_address()
+        if self._hand_count_addr:
+            val = self.read_int32(self._hand_count_addr)
+            if val is not None and 0 <= val <= 15:
+                return val
+        self._rescan_all()
+        return None
 
 # ── Singleton ──
 _reader = None
 
-
 def get_reader() -> WinMemoryReader:
-    """Dapatkan singleton memory reader."""
+    """Get the singleton memory reader instance."""
     global _reader
     if _reader is None:
         _reader = WinMemoryReader()
     return _reader
 
-
 def init() -> bool:
-    """Initialize memory reader. Cari proses dan open handle."""
+    """Initialize memory reader. Find process and open handle."""
     reader = get_reader()
     if reader._handle:
         return True
     return reader.open()
 
-
 def read_lp(player: int = 0) -> Optional[int]:
-    """Read LP player tertentu dari memory. None = gagal."""
-    reader = get_reader()
-    return reader.get_lp(player)
-
+    """Read LP for a given player (0=self, 1=opponent)."""
+    return get_reader().get_lp(player)
 
 def read_phase() -> Optional[int]:
-    """Read current phase dari memory. None = gagal."""
-    reader = get_reader()
-    return reader.get_phase()
-
+    """Read current game phase."""
+    return get_reader().get_phase()
 
 def read_is_my_turn() -> Optional[bool]:
-    """Read turn flag. None = gagal."""
-    reader = get_reader()
-    return reader.is_my_turn()
-
+    """Read whether it is our turn."""
+    return get_reader().is_my_turn()
 
 def read_hand_count() -> Optional[int]:
-    """Read hand count. None = gagal."""
-    reader = get_reader()
-    return reader.get_hand_count()
-
+    """Read hand count."""
+    return get_reader().get_hand_count()
 
 def is_available() -> bool:
-    """Check apakah memory reader tersedia (Windows + process running)."""
-    reader = get_reader()
-    return reader.is_available()
+    """Check whether the memory reader is ready for use."""
+    return get_reader().is_available()

@@ -54,6 +54,12 @@ def try_init_memory():
         logger.info("Memory reader initialization failed.")
     return success
 
+def refresh_memory() -> bool:
+    """Force a full memory rescan via the underlying memory_reader.
+    Returns True if the rescan succeeded and LP address is known.
+    """
+    return mem.refresh_memory()
+
 
 def init_memory_with_retry(max_retries: int = 3, delay: float = 2.0) -> bool:
     """

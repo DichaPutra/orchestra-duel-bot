@@ -17,6 +17,11 @@ Bot baca state game lewat **2 cara:**
 Memory diprioritaskan. Vision cuma dipanggil kalo ada perubahan (kartu dimainkan, dll).
 **Hasil: ~70% lebih hemat panggilan AI → bot 2-3x lebih cepat.**
 
+### Fitur Optimasi Memory (Terbaru)
+- **Persistent Offset Caching**: Offset alamat RAM hasil kalibrasi akan disimpan secara lokal di `config/offsets.yaml`. Saat bot dijalankan kembali, ia akan langsung memuat cache ini tanpa perlu melakukan scan memori dari awal.
+- **Auto-Rescan Pintar**: Jika pembacaan memori (LP) gagal 3 kali berturut-turut (misal karena state duel berubah), bot secara otomatis melakukan pemindaian memori (rescan) ulang di latar belakang untuk menyinkronkan kembali alamat memori.
+- **Manual/RPC Trigger**: Modul memori menyediakan API `refresh_memory()` yang dapat dipanggil oleh ZMQ Client via server RPC command `refreshMemory` untuk memaksa rescan alamat RAM kapan saja.
+
 ```
 ┌─────────────────────────┐
 │  Baca Memory (gratis)   │ ← LP, Phase, Turn
@@ -138,6 +143,7 @@ Anda dapat mengelola konfigurasi, melakukan kalibrasi memori, serta menjalankan 
 Jika Anda ingin menjalankan bot secara manual tanpa GUI:
 
 **1. Kalibrasi Memori (Dalam Duel):**
+Jalankan perintah ini di dalam duel untuk mendeteksi offset memori RAM game. Offset yang ditemukan akan disimpan secara otomatis ke dalam cache `config/offsets.yaml`:
 ```bash
 python auto_calibrate.py --save
 ```
@@ -173,6 +179,9 @@ yugioh-md-bot/
 ├── orchestra-bot/           # ← Kode bot utama
 │   ├── main.py              # Entry point
 │   ├── gui.py               # Windows GUI Manager desktop (Baru)
+│   ├── config/              # Folder konfigurasi
+│   │   ├── offsets.yaml     # Cache alamat RAM hasil kalibrasi otomatis
+│   │   └── .gitkeep
 │   ├── prompts/             # Folder prompt strategi (Baru)
 │   │   ├── system.txt       # Instruksi deck & format JSON LLM
 │   │   └── examples.txt     # Contoh input-output few-shot LLM
@@ -230,11 +239,12 @@ A: Mungkin koneksi Gemini lambat. Cek:
 - Pastiin Master Duel window mode 1280x720
 - Kalo pake OpenRouter, latency bisa lebih tinggi
 
-**Q: Abis update Master Duel, bot error. Kenapa?**
-A: Alamat memory berubah tiap update game. Jalanin ulang:
-```
+**Q: Abis update Master Duel atau ganti ronde, bot error. Kenapa?**
+A: Alamat memory berubah setiap kali game update atau saat duel baru dimulai jika offset belum stabil. Bot sekarang memiliki mekanisme **Auto-Rescan** otomatis saat pembacaan gagal 3 kali, namun jika Anda ingin melakukan pemindaian paksa/manual, cukup jalankan ulang kalibrasi:
+```bash
 python auto_calibrate.py --save
 ```
+Atau klik tombol **"Kalibrasi Memori"** di GUI Windows Manager. File offsets baru akan otomatis tertulis di `config/offsets.yaml` dan langsung dimuat oleh bot.
 
 **Q: Kalo di macOS / Linux bisa?**
 A: Bisa, tapi cuma pake Vision (gak bisa memory hacking). Jalanin `python main.py` aja.

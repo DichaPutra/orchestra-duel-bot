@@ -175,7 +175,14 @@ def find_all_addresses(memory_reader) -> dict:
     return results
 
 
-def save_offsets(results: dict, filepath: str):
+def save_offsets(results: dict, filepath: str = None):
+    # Use config directory if not specified
+    if filepath is None:
+        from pathlib import Path
+        base_dir = Path(__file__).resolve().parents[1]
+        filepath = base_dir / "config" / "offsets.yaml"
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
     """
     Simpan offsets yang ditemukan ke file.
     Format: simple YAML-style text.
@@ -197,7 +204,12 @@ def save_offsets(results: dict, filepath: str):
     logger.info(f"Offsets saved to {filepath}")
 
 
-def load_offsets(filepath: str) -> dict:
+def load_offsets(filepath: str = None) -> dict:
+    # Load from config directory if not specified
+    if filepath is None:
+        from pathlib import Path
+        base_dir = Path(__file__).resolve().parents[1]
+        filepath = base_dir / "config" / "offsets.yaml"
     """
     Load offsets dari file yang disimpan sebelumnya.
     """
