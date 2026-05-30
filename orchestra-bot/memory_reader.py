@@ -213,32 +213,87 @@ class WinMemoryReader:
         packed = struct.pack(f"<{'I' if value_size == 4 else 'H' if value_size == 2 else 'B'}", value)
         results = []
         try:
-            import psutil
-            proc = psutil.Process(self._pid)
-            for mmap in proc.memory_maps(grouped=False):
-                try:
-                    addr_start = int(mmap.addr.split("-")[0], 16)
-                    addr_end = int(mmap.addr.split("-")[1], 16)
-                    size = addr_end - addr_start
-                    if size < 4096 or size > 10 * 1024 * 1024:
-                        continue
-                    perms = (mmap.perms or "").lower()
-                    if "r" not in perms or "g" in perms or "w" not in perms:
-                        continue
-                    buf = self.read_bytes(addr_start, min(size, 256 * 1024))
-                    if buf is None:
-                        continue
+            is_64bit = sys.maxsize > 2**32
+            if is_64bit:
+                class MEMORY_BASIC_INFORMATION(ctypes.Structure):
+                    _fields_ = [
+                        ("BaseAddress", ctypes.c_ulonglong),
+                        ("AllocationBase", ctypes.c_ulonglong),
+                        ("AllocationProtect", ctypes.wintypes.DWORD),
+                        ("alignment1", ctypes.wintypes.DWORD),
+                        ("RegionSize", ctypes.c_ulonglong),
+                        ("State", ctypes.wintypes.DWORD),
+                        ("Protect", ctypes.wintypes.DWORD),
+                        ("Type", ctypes.wintypes.DWORD),
+                        ("alignment2", ctypes.wintypes.DWORD),
+                    ]
+            else:
+                class MEMORY_BASIC_INFORMATION(ctypes.Structure):
+                    _fields_ = [
+                        ("BaseAddress", ctypes.c_ulong),
+                        ("AllocationBase", ctypes.c_ulong),
+                        ("AllocationProtect", ctypes.wintypes.DWORD),
+                        ("RegionSize", ctypes.c_ulong),
+                        ("State", ctypes.wintypes.DWORD),
+                        ("Protect", ctypes.wintypes.DWORD),
+                        ("Type", ctypes.wintypes.DWORD),
+                    ]
+
+            mbi = MEMORY_BASIC_INFORMATION()
+            addr = 0
+            
+            PAGE_NOACCESS = 0x01
+            PAGE_GUARD = 0x100
+            MEM_COMMIT = 0x1000
+            WRITABLE_MASK = 0x04 | 0x08 | 0x40 | 0x80
+
+            VirtualQueryEx = self._kernel32.VirtualQueryEx
+            VirtualQueryEx.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.POINTER(MEMORY_BASIC_INFORMATION),
+                ctypes.c_size_t
+            ]
+            VirtualQueryEx.restype = ctypes.c_size_t
+
+            while True:
+                res = VirtualQueryEx(
+                    self._handle,
+                    ctypes.c_void_p(addr),
+                    ctypes.byref(mbi),
+                    ctypes.sizeof(mbi)
+                )
+                if res == 0:
+                    break
+                
+                is_committed = mbi.State == MEM_COMMIT
+                is_writable = (mbi.Protect & WRITABLE_MASK) != 0
+                is_guarded = (mbi.Protect & PAGE_GUARD) != 0
+                is_noaccess = (mbi.Protect & PAGE_NOACCESS) != 0
+                
+                if is_committed and is_writable and not is_guarded and not is_noaccess:
+                    reg_addr = mbi.BaseAddress
+                    reg_size = mbi.RegionSize
+                    
+                    # Read memory in chunks to avoid massive allocations
+                    chunk_size = 10 * 1024 * 1024
                     offset = 0
-                    while True:
-                        pos = buf.find(packed, offset)
-                        if pos == -1:
-                            break
-                        results.append(addr_start + pos)
-                        offset = pos + value_size
-                except (ValueError, OverflowError):
-                    continue
+                    while offset < reg_size:
+                        read_size = min(chunk_size, reg_size - offset)
+                        buf = self.read_bytes(reg_addr + offset, read_size)
+                        if buf:
+                            pos = 0
+                            while True:
+                                pos = buf.find(packed, pos)
+                                if pos == -1:
+                                    break
+                                results.append(reg_addr + offset + pos)
+                                pos += value_size
+                        offset += read_size
+                
+                addr = mbi.BaseAddress + mbi.RegionSize
         except Exception as e:
-            logger.debug(f"Memory scan error: {e}")
+            logger.error(f"Memory scan error: {e}")
         return results
 
     # ── Cached Offset Helpers ──

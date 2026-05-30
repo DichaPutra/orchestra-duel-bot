@@ -182,7 +182,9 @@ def save_offsets(results: dict, filepath: str = None):
         base_dir = Path(__file__).resolve().parents[1]
         filepath = base_dir / "config" / "offsets.yaml"
     # Ensure directory exists
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    dir_name = os.path.dirname(filepath)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
     """
     Simpan offsets yang ditemukan ke file.
     Format: simple YAML-style text.
