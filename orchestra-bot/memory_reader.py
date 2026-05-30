@@ -298,18 +298,44 @@ class WinMemoryReader:
 
     # ── Cached Offset Helpers ──
     def _load_cached_offsets(self):
-        """Load saved offsets from `config/offsets.yaml` if the file exists."""
+        """Load saved offsets from `config/offsets.yaml` or `memory_offsets.txt` if they exist."""
         try:
-            cfg_path = Path(__file__).resolve().parents[1] / "config" / "offsets.yaml"
-            if cfg_path.exists():
-                with open(cfg_path, "r") as f:
-                    data = json.load(f)
+            cfg_path = Path(__file__).resolve().parent / "config" / "offsets.yaml"
+            root_txt_path = Path(__file__).resolve().parent / "memory_offsets.txt"
+            
+            data = {}
+            for path in [cfg_path, root_txt_path]:
+                if path.exists():
+                    try:
+                        # Try memory_scanner which supports YAML
+                        data = memory_scanner.load_offsets(str(path))
+                        if data:
+                            logger.info(f"Loaded cached memory offsets from {path} via memory_scanner")
+                            break
+                    except Exception as e:
+                        logger.debug(f"Failed to load offsets via memory_scanner from {path}: {e}")
+                        # Fallback to JSON
+                        try:
+                            with open(path, "r") as f:
+                                data = json.load(f)
+                            if data:
+                                logger.info(f"Loaded cached memory offsets from {path} via JSON")
+                                break
+                        except Exception as e2:
+                            logger.debug(f"Failed to load offsets via JSON from {path}: {e2}")
+
+            if data:
                 self._lp_self_addr = data.get("lp_self")
                 self._lp_opponent_addr = data.get("lp_opponent")
                 self._phase_addr = data.get("phase")
-                self._turn_addr = data.get("is_my_turn")
+                self._turn_addr = data.get("is_my_turn") or data.get("turn")
                 self._hand_count_addr = data.get("hand_count")
-                logger.info(f"Loaded cached memory offsets from {cfg_path}")
+                # Fallback names
+                if not self._turn_addr and data.get("turn"):
+                    self._turn_addr = data.get("turn")
+                if not self._phase_addr and data.get("phase"):
+                    self._phase_addr = data.get("phase")
+                logger.info(f"Using offsets: lp_self=0x{self._lp_self_addr:X if self._lp_self_addr else 0}, lp_opp=0x{self._lp_opponent_addr:X if self._lp_opponent_addr else 0}, phase=0x{self._phase_addr:X if self._phase_addr else 0}, turn=0x{self._turn_addr:X if self._turn_addr else 0}")
         except Exception as e:
             logger.debug(f"Failed to load cached offsets: {e}")
 
@@ -320,7 +346,7 @@ class WinMemoryReader:
         self._phase_addr = results.get("phase")
         self._turn_addr = results.get("is_my_turn")
         self._hand_count_addr = results.get("hand_count")
-        cfg_path = Path(__file__).resolve().parents[1] / "config" / "offsets.yaml"
+        cfg_path = Path(__file__).resolve().parent / "config" / "offsets.yaml"
         os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
         with open(cfg_path, "w") as f:
             json.dump({

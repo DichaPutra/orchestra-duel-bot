@@ -179,7 +179,7 @@ def save_offsets(results: dict, filepath: str = None):
     # Use config directory if not specified
     if filepath is None:
         from pathlib import Path
-        base_dir = Path(__file__).resolve().parents[1]
+        base_dir = Path(__file__).resolve().parent
         filepath = base_dir / "config" / "offsets.yaml"
     # Ensure directory exists
     dir_name = os.path.dirname(filepath)
@@ -210,7 +210,7 @@ def load_offsets(filepath: str = None) -> dict:
     # Load from config directory if not specified
     if filepath is None:
         from pathlib import Path
-        base_dir = Path(__file__).resolve().parents[1]
+        base_dir = Path(__file__).resolve().parent
         filepath = base_dir / "config" / "offsets.yaml"
     """
     Load offsets dari file yang disimpan sebelumnya.

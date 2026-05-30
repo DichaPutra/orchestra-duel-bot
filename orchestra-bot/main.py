@@ -113,6 +113,83 @@ def standalone_mode(bot_name: str = "self_burn"):
         logger.info("Bot stopped by user")
 
 
+def free_port(port: int = 5555):
+    """Find and terminate any process using the specified port to avoid address-in-use errors."""
+    import os
+    import subprocess
+    logger.info("Checking if port %d is in use...", port)
+    killed = False
+
+    # 1. Try to find and kill using psutil
+    try:
+        import psutil
+        for conn in psutil.net_connections(kind='tcp'):
+            if conn.laddr and conn.laddr.port == port:
+                pid = conn.pid
+                if pid and pid != os.getpid():
+                    try:
+                        proc = psutil.Process(pid)
+                        name = proc.name()
+                        logger.info("Found process using port %d: %s (PID: %d). Terminating...", port, name, pid)
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=2)
+                        except psutil.TimeoutExpired:
+                            logger.info("Process did not respond, forcing kill...")
+                            proc.kill()
+                        logger.info("Successfully terminated process on port %d.", port)
+                        killed = True
+                    except Exception as e:
+                        logger.error("Failed to terminate process %d: %s", pid, e)
+        
+        if not killed:
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    if proc.info['pid'] == os.getpid():
+                        continue
+                    for conn in proc.connections(kind='tcp'):
+                        if conn.laddr and conn.laddr.port == port:
+                            pid = proc.info['pid']
+                            name = proc.info['name']
+                            logger.info("Found process using port %d: %s (PID: %d) via iteration. Terminating...", port, name, pid)
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=2)
+                            except psutil.TimeoutExpired:
+                                proc.kill()
+                            logger.info("Successfully terminated process on port %d.", port)
+                            killed = True
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.debug("psutil check failed: %s", e)
+
+    # 2. Windows fallback
+    if not killed and os.name == 'nt':
+        try:
+            output = subprocess.check_output(f'netstat -ano | findstr :{port}', shell=True, text=True)
+            pids = set()
+            for line in output.strip().split('\n'):
+                parts = line.split()
+                if len(parts) >= 5:
+                    pid_str = parts[-1]
+                    if pid_str.isdigit():
+                        pids.add(int(pid_str))
+            for pid in pids:
+                if pid != os.getpid() and pid > 0:
+                    logger.info("Found PID %d using port %d via netstat. Killing via taskkill...", pid, port)
+                    subprocess.run(f'taskkill /F /PID {pid}', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.info("Successfully killed PID %d via taskkill.", pid)
+                    killed = True
+        except subprocess.CalledProcessError:
+            pass
+        except Exception as e:
+            logger.error("netstat/taskkill fallback failed: %s", e)
+
+    if not killed:
+        logger.info("Port %d is free.", port)
+
+
 def main():
     setup_dotenv()
 
@@ -126,6 +203,9 @@ def main():
                         choices=["self_burn", "pass_turn", "llm"],
                         help="Bot script to use (default: llm)")
     args = parser.parse_args()
+
+    # Bebaskan port sebelum menjalankan server ZMQ
+    free_port(args.port)
 
     if args.server:
         server_mode(args.port)

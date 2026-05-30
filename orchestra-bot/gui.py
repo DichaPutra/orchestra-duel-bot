@@ -965,11 +965,112 @@ class OrchestraGUI:
 
         self.root.after(100, self.poll_logs)
 
+    def _free_port(self, port=5555):
+        """Find and terminate any process using the specified port."""
+        try:
+            import psutil
+        except ImportError:
+            self.append_log("[GUI WARNING] Module `psutil` tidak terpasang. Gagal mendeteksi port via psutil.\n")
+            if os.name == 'nt':
+                self._free_port_netstat_fallback(port)
+            return
+
+        self.append_log(f"[GUI] Memeriksa apakah port {port} sedang digunakan oleh proses lain...\n")
+        self.root.update_idletasks()
+        killed = False
+        
+        # 1. Search via connections
+        try:
+            for conn in psutil.net_connections(kind='tcp'):
+                if conn.laddr and conn.laddr.port == port:
+                    pid = conn.pid
+                    if pid and pid != os.getpid():
+                        try:
+                            proc = psutil.Process(pid)
+                            name = proc.name()
+                            self.append_log(f"[GUI] Menemukan proses yang menggunakan port {port}: {name} (PID: {pid}). Menghentikan...\n")
+                            self.root.update_idletasks()
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=2)
+                            except psutil.TimeoutExpired:
+                                self.append_log(f"[GUI] Proses {pid} tidak merespon, memaksa kill...\n")
+                                proc.kill()
+                            self.append_log(f"[GUI] ✅ Proses {pid} berhasil dihentikan.\n")
+                            killed = True
+                        except Exception as e:
+                            self.append_log(f"[GUI ERROR] Gagal menghentikan proses {pid}: {e}\n")
+        except Exception:
+            pass
+
+        # 2. Iterate processes fallback
+        if not killed:
+            try:
+                for proc in psutil.process_iter(['pid', 'name']):
+                    try:
+                        if proc.info['pid'] == os.getpid():
+                            continue
+                        for conn in proc.connections(kind='tcp'):
+                            if conn.laddr and conn.laddr.port == port:
+                                pid = proc.info['pid']
+                                name = proc.info['name']
+                                self.append_log(f"[GUI] Menemukan proses yang menggunakan port {port}: {name} (PID: {pid}) via process scan. Menghentikan...\n")
+                                self.root.update_idletasks()
+                                proc.terminate()
+                                try:
+                                    proc.wait(timeout=2)
+                                except psutil.TimeoutExpired:
+                                    proc.kill()
+                                self.append_log(f"[GUI] ✅ Proses {pid} berhasil dihentikan.\n")
+                                killed = True
+                    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                        continue
+            except Exception:
+                pass
+
+        # 3. Fallback netstat/taskkill on Windows
+        if not killed and os.name == 'nt':
+            killed = self._free_port_netstat_fallback(port)
+
+        if not killed:
+            self.append_log(f"[GUI] Port {port} aman / tidak terdeteksi proses lain yang menggunakannya.\n")
+        self.root.update_idletasks()
+
+    def _free_port_netstat_fallback(self, port):
+        """Fallback to netstat and taskkill on Windows if psutil fails/lacks access."""
+        killed = False
+        try:
+            output = subprocess.check_output(f'netstat -ano | findstr :{port}', shell=True, text=True)
+            pids = set()
+            for line in output.strip().split('\n'):
+                parts = line.split()
+                if len(parts) >= 5:
+                    pid_str = parts[-1]
+                    if pid_str.isdigit():
+                        pids.add(int(pid_str))
+            
+            for pid in pids:
+                if pid != os.getpid() and pid > 0:
+                    self.append_log(f"[GUI] Menemukan PID {pid} menggunakan port {port} via netstat. Menghentikan...\n")
+                    self.root.update_idletasks()
+                    subprocess.run(f'taskkill /F /PID {pid}', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.append_log(f"[GUI] ✅ Proses {pid} dipaksa berhenti via taskkill.\n")
+                    killed = True
+        except subprocess.CalledProcessError:
+            pass
+        except Exception as e:
+            self.append_log(f"[GUI ERROR] Gagal menjalankan netstat/taskkill fallback: {e}\n")
+        return killed
+
     def start_bot(self):
         if self.running_process:
             return
         self.switch_tab("logs")
         self.clear_logs()
+        
+        # Bebaskan port 5555 dari proses lain yang masih berjalan
+        self._free_port(5555)
+        
         self.append_log("[GUI] Menyimpan konfigurasi...\n")
         self.save_settings()
         cmd = [sys.executable, "main.py"]
