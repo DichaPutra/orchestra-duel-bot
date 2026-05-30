@@ -99,8 +99,6 @@ def standalone_mode(bot_name: str = "self_burn"):
     # Import dan jalanin bot script
     if bot_name == "self_burn":
         from bots.self_burn import run as run_bot
-    elif bot_name == "pass_turn":
-        from bots.pass_turn import run as run_bot
     elif bot_name == "llm":
         from bots.llm_bot import run as run_bot
     else:

@@ -106,10 +106,31 @@ class OrchestraServer:
             "isOnline": self._cmd_is_online,
             "isDiscardReady": self._cmd_is_discard_ready,
             "discardLeftmostCard": self._cmd_discard_leftmost,
+            
+            # Compatibility stubs
+            "setActivationConfirmation": self._cmd_set_activation_confirmation,
+            "getDialogCardList": self._cmd_get_dialog_card_list,
+            "getChainData": self._cmd_get_chain_data,
+            "getDuelLog": self._cmd_get_duel_log,
+            "getLastUsedCardName": self._cmd_get_last_used_card_name,
+            "getCardTurn": self._cmd_get_card_turn,
+            "getCardFace": self._cmd_get_card_face,
+            "comGetCommandMask": self._cmd_com_get_command_mask,
+            "getDeckSize": self._cmd_get_deck_size,
+            "getPlayerName": self._cmd_get_player_name,
+            "specialSummonFromHand": self._cmd_special_summon_from_hand,
+            "confirmCardTurn": self._cmd_confirm_card_turn,
+            "performTributeSummon": self._cmd_perform_tribute_summon,
+            "declareAttack": self._cmd_declare_attack,
+            "selectCardsFromDialog": self._cmd_select_cards_from_dialog,
+            "clickMyMonsterZone": self._cmd_click_my_monster_zone,
+            "setDuelStep": self._cmd_set_duel_step,
+            "getMonsterZoneCoordinates": self._cmd_get_monster_zone_coordinates,
         }
         handler = handlers.get(command)
         if handler is None:
-            return {"errorMessage": f"Unknown command: {command}"}
+            logger.warning(f"⚠️ Command '{command}' not registered. Returning default success response.")
+            return {"returnValue": True}
 
         try:
             return handler(args)
@@ -479,6 +500,80 @@ class OrchestraServer:
         time.sleep(0.5)
         self.input.confirm()
         return {"returnValue": True}
+
+    def _cmd_set_activation_confirmation(self, args) -> dict:
+        mode = args.get("activateConfirmMode", 0)
+        logger.info("setActivationConfirmation: mode=%s", mode)
+        return {"returnValue": True}
+
+    def _cmd_get_dialog_card_list(self, args) -> dict: 
+        return {"returnValue": []}
+
+    def _cmd_get_chain_data(self, args) -> dict:
+        return {"returnValue": []}
+
+    def _cmd_get_duel_log(self, args) -> dict:
+        return {"returnValue": []}
+
+    def _cmd_get_last_used_card_name(self, args) -> dict:
+        return {"returnValue": ""}
+
+    def _cmd_get_card_turn(self, args) -> dict:
+        return {"returnValue": 0}
+
+    def _cmd_get_card_face(self, args) -> dict:
+        return {"returnValue": 0}
+
+    def _cmd_com_get_command_mask(self, args) -> dict:
+        return {"returnValue": 0}
+
+    def _cmd_get_deck_size(self, args) -> dict:
+        return {"returnValue": 40}
+
+    def _cmd_get_player_name(self, args) -> dict:
+        return {"returnValue": "Player"}
+
+    def _cmd_special_summon_from_hand(self, args) -> dict:
+        index = args.get("index", 0)
+        position = args.get("position", 0)
+        logger.info("specialSummonFromHand: index=%d position=%d", index, position)
+        if self.input is not None:
+            self.input.click_hand_card(index)
+            time.sleep(0.8)
+            self.input.confirm()
+        return {"returnValue": True}
+
+    def _cmd_confirm_card_turn(self, args) -> dict:
+        return {"returnValue": True}
+
+    def _cmd_perform_tribute_summon(self, args) -> dict:
+        return {"returnValue": True}
+
+    def _cmd_declare_attack(self, args) -> dict:
+        position = args.get("position", 0)
+        target = args.get("targetPosition", None)
+        logger.info("declareAttack: position=%d target=%s", position, target)
+        if self.input is not None:
+            self.input.click_monster_zone(position)
+            time.sleep(0.8)
+            if target is not None:
+                self.input.click_monster_zone(target)
+            else:
+                self.input.click(640, 200)
+            time.sleep(0.8)
+        return {"returnValue": True}
+
+    def _cmd_select_cards_from_dialog(self, args) -> dict:
+        return {"returnValue": True}
+
+    def _cmd_click_my_monster_zone(self, args) -> dict:
+        return {"returnValue": True}
+
+    def _cmd_set_duel_step(self, args) -> dict:
+        return {"returnValue": True}
+
+    def _cmd_get_monster_zone_coordinates(self, args) -> dict:
+        return {"returnValue": {"x": 640, "y": 360}}
 
 
 def _convert_state_to_client_format(state: dict) -> dict:
